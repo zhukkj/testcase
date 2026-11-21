@@ -1,1 +1,36 @@
+# ---- 密钥 ----
+.env
+*.key
+*.pem
+
+# ---- 虚拟环境 ----
+.venv/
+.venv-run/
+.venv-clean/
+
+# ---- 模型权重（BGE-M3 约 2GB，需自行下载到 models/ 下）----
+models/
+
+# ---- 运行时产物 ----
+logs/
+nohup.out
+outputs/
+db.sqlite3
+uploads/
+milvus-data/
+prd/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- 编辑器 / 系统 ----
 .claude
+.idea/
+.vscode/
+.DS_Store
+
+# 编辑器残留的临时副本（项目里出现过 XXxxxx 这类文件）
+XX*

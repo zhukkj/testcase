@@ -1,0 +1,351 @@
+{
+  "projectName": "TestBrain 演示项目",
+  "apiDefinitions": [
+    {
+      "id": "api-login-001",
+      "name": "用户登录",
+      "path": "/api/v1/auth/login",
+      "method": "POST",
+      "protocol": "HTTP",
+      "status": "DONE",
+      "projectId": "test-brain-demo",
+      "moduleId": "module-auth",
+      "tags": [],
+      "request": {
+        "polymorphicName": "MsHTTPElement",
+        "stepId": null,
+        "resourceId": null,
+        "projectId": null,
+        "name": "用户登录",
+        "enable": true,
+        "children": [
+          {
+            "polymorphicName": "MsCommonElement",
+            "stepId": null,
+            "resourceId": null,
+            "projectId": null,
+            "name": null,
+            "enable": true,
+            "children": [],
+            "parent": null,
+            "csvIds": null,
+            "preProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "postProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "assertionConfig": { "enableGlobal": true, "assertions": [] }
+          }
+        ],
+        "parent": null,
+        "csvIds": null,
+        "customizeRequest": false,
+        "customizeRequestEnvEnable": false,
+        "path": "/api/v1/auth/login",
+        "method": "POST",
+        "body": {
+          "bodyType": "JSON",
+          "jsonBody": {
+            "jsonValue": "{\n  \"username\": \"test1\",\n  \"password\": \"Test@123456\",\n  \"remember\": true\n}",
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "username": { "type": "string", "required": true, "minLength": 3, "maxLength": 20 },
+                "password": { "type": "string", "required": true, "minLength": 8, "maxLength": 32 },
+                "remember": { "type": "boolean", "required": false }
+              },
+              "required": ["username", "password"]
+            }
+          },
+          "bodyDataByType": {
+            "jsonValue": "{\n  \"username\": \"test1\",\n  \"password\": \"Test@123456\",\n  \"remember\": true\n}"
+          },
+          "formDataBody": { "formValues": [] },
+          "xwwwformBody": { "formValues": [] }
+        },
+        "headers": [
+          { "enable": true, "key": "Content-Type", "value": "application/json", "type": "string" }
+        ],
+        "rest": [],
+        "query": [],
+        "otherConfig": {
+          "connectTimeout": 60000,
+          "responseTimeout": 60000,
+          "certificateAlias": null,
+          "followRedirects": true,
+          "autoRedirects": false
+        },
+        "authConfig": {
+          "authType": "NONE",
+          "basicAuth": { "userName": null, "password": null, "valid": false },
+          "digestAuth": { "userName": null, "password": null, "valid": false },
+          "httpauthValid": false
+        },
+        "moduleId": null,
+        "num": null,
+        "mockNum": null
+      },
+      "apiTestCaseList": []
+    },
+    {
+      "id": "api-user-002",
+      "name": "创建用户",
+      "path": "/api/v1/users",
+      "method": "POST",
+      "protocol": "HTTP",
+      "status": "DONE",
+      "projectId": "test-brain-demo",
+      "moduleId": "module-user",
+      "tags": [],
+      "request": {
+        "polymorphicName": "MsHTTPElement",
+        "stepId": null,
+        "resourceId": null,
+        "projectId": null,
+        "name": "创建用户",
+        "enable": true,
+        "children": [
+          {
+            "polymorphicName": "MsCommonElement",
+            "stepId": null,
+            "resourceId": null,
+            "projectId": null,
+            "name": null,
+            "enable": true,
+            "children": [],
+            "parent": null,
+            "csvIds": null,
+            "preProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "postProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "assertionConfig": { "enableGlobal": true, "assertions": [] }
+          }
+        ],
+        "parent": null,
+        "csvIds": null,
+        "customizeRequest": false,
+        "customizeRequestEnvEnable": false,
+        "path": "/api/v1/users",
+        "method": "POST",
+        "body": {
+          "bodyType": "JSON",
+          "jsonBody": {
+            "jsonValue": "{\n  \"username\": \"zhulei\",\n  \"email\": \"zhulei@example.com\",\n  \"age\": 28,\n  \"enabled\": true\n}",
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "username": { "type": "string", "required": true, "minLength": 3, "maxLength": 20 },
+                "email": { "type": "string", "required": true, "maxLength": 64 },
+                "age": { "type": "integer", "required": false, "minimum": 18, "maximum": 65 },
+                "enabled": { "type": "boolean", "required": false }
+              },
+              "required": ["username", "email"]
+            }
+          },
+          "bodyDataByType": {
+            "jsonValue": "{\n  \"username\": \"zhulei\",\n  \"email\": \"zhulei@example.com\",\n  \"age\": 28,\n  \"enabled\": true\n}"
+          },
+          "formDataBody": { "formValues": [] },
+          "xwwwformBody": { "formValues": [] }
+        },
+        "headers": [
+          { "enable": true, "key": "Content-Type", "value": "application/json", "type": "string" }
+        ],
+        "rest": [],
+        "query": [],
+        "otherConfig": {
+          "connectTimeout": 60000,
+          "responseTimeout": 60000,
+          "certificateAlias": null,
+          "followRedirects": true,
+          "autoRedirects": false
+        },
+        "authConfig": {
+          "authType": "NONE",
+          "basicAuth": { "userName": null, "password": null, "valid": false },
+          "digestAuth": { "userName": null, "password": null, "valid": false },
+          "httpauthValid": false
+        },
+        "moduleId": null,
+        "num": null,
+        "mockNum": null
+      },
+      "apiTestCaseList": [
+        {
+          "id": "case-user-001",
+          "name": "创建用户_正常场景",
+          "priority": "P0",
+          "num": 100001,
+          "tags": ["手工编写"]
+        }
+      ]
+    },
+    {
+      "id": "api-order-003",
+      "name": "创建订单",
+      "path": "/api/v1/orders",
+      "method": "POST",
+      "protocol": "HTTP",
+      "status": "DONE",
+      "projectId": "test-brain-demo",
+      "moduleId": "module-order",
+      "tags": [],
+      "request": {
+        "polymorphicName": "MsHTTPElement",
+        "stepId": null,
+        "resourceId": null,
+        "projectId": null,
+        "name": "创建订单",
+        "enable": true,
+        "children": [
+          {
+            "polymorphicName": "MsCommonElement",
+            "stepId": null,
+            "resourceId": null,
+            "projectId": null,
+            "name": null,
+            "enable": true,
+            "children": [],
+            "parent": null,
+            "csvIds": null,
+            "preProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "postProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "assertionConfig": { "enableGlobal": true, "assertions": [] }
+          }
+        ],
+        "parent": null,
+        "csvIds": null,
+        "customizeRequest": false,
+        "customizeRequestEnvEnable": false,
+        "path": "/api/v1/orders",
+        "method": "POST",
+        "body": {
+          "bodyType": "JSON",
+          "jsonBody": {
+            "jsonValue": "{\n  \"productId\": \"SKU-1001\",\n  \"quantity\": 2,\n  \"couponCode\": \"NEW2026\",\n  \"items\": [\"SKU-1001\"]\n}",
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "productId": { "type": "string", "required": true, "maxLength": 32 },
+                "quantity": { "type": "integer", "required": true, "minimum": 1, "maximum": 99 },
+                "couponCode": { "type": "string", "required": false, "maxLength": 20 },
+                "items": { "type": "array", "required": false }
+              },
+              "required": ["productId", "quantity"]
+            }
+          },
+          "bodyDataByType": {
+            "jsonValue": "{\n  \"productId\": \"SKU-1001\",\n  \"quantity\": 2,\n  \"couponCode\": \"NEW2026\",\n  \"items\": [\"SKU-1001\"]\n}"
+          },
+          "formDataBody": { "formValues": [] },
+          "xwwwformBody": { "formValues": [] }
+        },
+        "headers": [
+          { "enable": true, "key": "Content-Type", "value": "application/json", "type": "string" }
+        ],
+        "rest": [],
+        "query": [
+          { "key": "channel", "value": "app", "paramType": "string", "required": false, "minLength": 1, "maxLength": 16 },
+          { "key": "dryRun", "value": "false", "paramType": "boolean", "required": false }
+        ],
+        "otherConfig": {
+          "connectTimeout": 60000,
+          "responseTimeout": 60000,
+          "certificateAlias": null,
+          "followRedirects": true,
+          "autoRedirects": false
+        },
+        "authConfig": {
+          "authType": "NONE",
+          "basicAuth": { "userName": null, "password": null, "valid": false },
+          "digestAuth": { "userName": null, "password": null, "valid": false },
+          "httpauthValid": false
+        },
+        "moduleId": null,
+        "num": null,
+        "mockNum": null
+      },
+      "apiTestCaseList": []
+    },
+    {
+      "id": "api-order-cancel-004",
+      "name": "取消订单",
+      "path": "/api/v1/orders/{orderId}/cancel",
+      "method": "POST",
+      "protocol": "HTTP",
+      "status": "DONE",
+      "projectId": "test-brain-demo",
+      "moduleId": "module-order",
+      "tags": [],
+      "request": {
+        "polymorphicName": "MsHTTPElement",
+        "stepId": null,
+        "resourceId": null,
+        "projectId": null,
+        "name": "取消订单",
+        "enable": true,
+        "children": [
+          {
+            "polymorphicName": "MsCommonElement",
+            "stepId": null,
+            "resourceId": null,
+            "projectId": null,
+            "name": null,
+            "enable": true,
+            "children": [],
+            "parent": null,
+            "csvIds": null,
+            "preProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "postProcessorConfig": { "enableGlobal": true, "processors": [] },
+            "assertionConfig": { "enableGlobal": true, "assertions": [] }
+          }
+        ],
+        "parent": null,
+        "csvIds": null,
+        "customizeRequest": false,
+        "customizeRequestEnvEnable": false,
+        "path": "/api/v1/orders/{orderId}/cancel",
+        "method": "POST",
+        "body": {
+          "bodyType": "JSON",
+          "jsonBody": {
+            "jsonValue": "{\n  \"reason\": \"用户主动取消\",\n  \"force\": false\n}",
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "reason": { "type": "string", "required": false, "maxLength": 200 },
+                "force": { "type": "boolean", "required": false }
+              },
+              "required": []
+            }
+          },
+          "bodyDataByType": {
+            "jsonValue": "{\n  \"reason\": \"用户主动取消\",\n  \"force\": false\n}"
+          },
+          "formDataBody": { "formValues": [] },
+          "xwwwformBody": { "formValues": [] }
+        },
+        "headers": [
+          { "enable": true, "key": "Content-Type", "value": "application/json", "type": "string" }
+        ],
+        "rest": [
+          { "key": "orderId", "value": "ORD-20261121-0001", "paramType": "string", "required": true, "minLength": 1, "maxLength": 40 }
+        ],
+        "query": [],
+        "otherConfig": {
+          "connectTimeout": 60000,
+          "responseTimeout": 60000,
+          "certificateAlias": null,
+          "followRedirects": true,
+          "autoRedirects": false
+        },
+        "authConfig": {
+          "authType": "NONE",
+          "basicAuth": { "userName": null, "password": null, "valid": false },
+          "digestAuth": { "userName": null, "password": null, "valid": false },
+          "httpauthValid": false
+        },
+        "moduleId": null,
+        "num": null,
+        "mockNum": null
+      },
+      "apiTestCaseList": []
+    }
+  ]
+}
