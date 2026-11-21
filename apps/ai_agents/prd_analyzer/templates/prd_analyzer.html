@@ -167,6 +167,12 @@
                 <!-- 结果将通过 JavaScript 填充 -->
             </tbody>
         </table>
+        <div class="text-right mt-3" id="toGenerateContainer" style="display: none;">
+            <button type="button" class="btn btn-primary" id="toGenerateBtn"
+                    onclick="goGenerateByPoints()">
+                用这些测试点生成用例 →
+            </button>
+        </div>
     </div>
 </div>
 
@@ -315,10 +321,34 @@ function setProcessingState(processing) {
     }
 }
 
+// 保存最近一次解析结果，供「用这些测试点生成用例」使用
+let lastAnalysisResult = null;
+
+function goGenerateByPoints() {
+    if (!lastAnalysisResult || !lastAnalysisResult.test_points || lastAnalysisResult.test_points.length === 0) {
+        alert('请先解析 PRD 文档，拿到测试点后再生成用例');
+        return;
+    }
+    // 测试点体积可能较大，用 sessionStorage 跨页面传递（不落服务端，刷新即清）
+    sessionStorage.setItem('prd_test_points', JSON.stringify({
+        test_points: lastAnalysisResult.test_points,
+        summary: lastAnalysisResult.summary || {},
+        created_at: new Date().toISOString()
+    }));
+    window.location.href = '/test_case_generator/';
+}
+
 function displayResults(result) {
+    lastAnalysisResult = result;
     const resultTable = document.getElementById('resultTable');
     const resultTableBody = document.getElementById('resultTableBody');
     const summaryDiv = document.getElementById('summary');
+    const toGenerateContainer = document.getElementById('toGenerateContainer');
+
+    if (toGenerateContainer) {
+        toGenerateContainer.style.display =
+            (result.test_points && result.test_points.length) ? 'block' : 'none';
+    }
 
     // 清空现有内容
     resultTableBody.innerHTML = '';

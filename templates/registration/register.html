@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}TestBrain - 注册{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+    <div class="row justify-content-center w-100">
+        <div class="col-md-6 col-lg-5">
+            <div class="card">
+                <div class="card-header">注册 TestBrain</div>
+                <div class="card-body">
+                    {% if errors %}
+                    <div class="alert alert-danger">
+                        <ul class="mb-0 pl-3">
+                            {% for error in errors %}
+                            <li>{{ error }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+
+                    <form method="post" action="{% url 'register' %}" id="register-form">
+                        {% csrf_token %}
+
+                        <div class="form-group mb-3">
+                            <label for="id_username">用户名 <span class="text-danger">*</span></label>
+                            <input type="text" name="username" id="id_username"
+                                   class="form-control" value="{{ form.username }}"
+                                   placeholder="字母、数字、下划线，3~20 位"
+                                   autofocus required>
+                        </div>
+
+                        <div class="form-group mb-3">
+                            <label for="id_display_name">显示名</label>
+                            <input type="text" name="display_name" id="id_display_name"
+                                   class="form-control" value="{{ form.display_name }}"
+                                   placeholder="留空则使用用户名，例如：张三">
+                        </div>
+
+                        <div class="form-group mb-3">
+                            <label>角色 <span class="text-danger">*</span></label>
+                            <div class="role-picker">
+                                <label class="role-option">
+                                    <input type="radio" name="role" value="member"
+                                           {% if form.role != 'lead' %}checked{% endif %}>
+                                    <span class="role-box">
+                                        <span class="role-name">{{ role_labels.member }}</span>
+                                        <span class="role-desc">生成、评审用例，日常测试工作</span>
+                                    </span>
+                                </label>
+                                <label class="role-option">
+                                    <input type="radio" name="role" value="lead"
+                                           {% if form.role == 'lead' %}checked{% endif %}>
+                                    <span class="role-box">
+                                        <span class="role-name">{{ role_labels.lead }}</span>
+                                        <span class="role-desc">额外可删除用例、管理团队数据</span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="form-group mb-3" id="invite-group" style="display:none;">
+                            <label for="id_invite_code">组长邀请码 <span class="text-danger">*</span></label>
+                            <input type="text" name="invite_code" id="id_invite_code"
+                                   class="form-control" placeholder="向管理员索取">
+                            <small class="text-muted">组长权限包含删除用例等破坏性操作，需邀请码才能注册。</small>
+                        </div>
+
+                        <div class="form-group mb-3">
+                            <label for="id_password1">密码 <span class="text-danger">*</span></label>
+                            <input type="password" name="password1" id="id_password1"
+                                   class="form-control" required>
+                            <small class="text-muted">至少 8 位，不能是纯数字或过于常见的密码。</small>
+                        </div>
+
+                        <div class="form-group mb-4">
+                            <label for="id_password2">确认密码 <span class="text-danger">*</span></label>
+                            <input type="password" name="password2" id="id_password2"
+                                   class="form-control" required>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-block">注册并登录</button>
+                    </form>
+                </div>
+                <div class="card-footer text-center">
+                    <small class="text-muted">已有账号？<a href="{% url 'login' %}">去登录</a></small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const inviteGroup = document.getElementById('invite-group');
+    const inviteInput = document.getElementById('id_invite_code');
+    const radios = document.querySelectorAll('input[name="role"]');
+
+    function syncInvite() {
+        const picked = document.querySelector('input[name="role"]:checked');
+        const isLead = picked && picked.value === 'lead';
+        inviteGroup.style.display = isLead ? 'block' : 'none';
+        if (!isLead) inviteInput.value = '';   // 切回组员时别把邀请码留着提交
+    }
+
+    radios.forEach(r => r.addEventListener('change', syncInvite));
+    syncInvite();
+});
+</script>
+{% endblock %}

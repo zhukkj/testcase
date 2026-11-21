@@ -29,7 +29,8 @@ class DeepSeekChatModel(ChatOpenAI):
         # - model: 由工厂传入
         # - extra_body: 用于自定义参数（如enable_thinking）
         # - **kwargs: 用于标准OpenAI参数（如temperature, max_tokens等）
-        logger.info(f"用于初始化DeepSeekChatModel的参数: model={model}, base_url={base_url}, api_key={api_key}, extra_body={extra_body}, kwargs={kwargs}")
+        masked_key = f'***{api_key[-4:]}' if api_key else None
+        logger.info(f"用于初始化DeepSeekChatModel的参数: model={model}, base_url={base_url}, api_key={masked_key}, extra_body={extra_body}")
         super().__init__(
             model=model,
             base_url=base_url,

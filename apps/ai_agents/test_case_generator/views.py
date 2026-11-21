@@ -1,8 +1,11 @@
 # import os
 import json
+from django.contrib.auth.decorators import login_required
+from apps.utils.auth import async_login_required
 from django.http import JsonResponse
 from apps.llm import LLMServiceFactory
 from apps.ai_agents.test_case_generator.generator import TestCaseGeneratorAgent
+from apps.ai_agents.test_case_generator.point_generator import TestPointCaseGenerator
 from apps.core.models import TestCase
 from apps.utils.logger_manager import get_logger
 from django.views.decorators.http import require_http_methods
@@ -21,7 +24,7 @@ knowledge_service = get_knowledgeService_instance()
 
 
 
-# @login_required 先屏蔽登录
+@async_login_required
 async def generate(request):
     """
     页面-测试用例生成页面视图函数
@@ -103,7 +106,63 @@ async def generate(request):
         }, status=500)
 
 
-# @login_required 先屏蔽登录
+@async_login_required
+@require_http_methods(["POST"])
+async def generate_by_points(request):
+    """按测试点逐条生成测试用例（PRD 分析 → 用例生成的衔接入口）
+
+    请求体：
+    {
+      "test_points": [ {id, title, description, priority, scenarios:[...]}, ... ],
+      "case_count_per_point": 1,
+      "llm_provider": "deepseek",
+      "case_design_methods": ["等价类划分法"],
+      "case_categories": ["功能测试"],
+      "context": "可选的整体需求背景"
+    }
+    """
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'message': '无效的JSON数据'}, status=400)
+
+    test_points = data.get('test_points') or []
+    if not test_points:
+        return JsonResponse({'success': False, 'message': '测试点列表不能为空'}, status=400)
+
+    llm_provider = data.get('llm_provider', DEFAULT_PROVIDER)
+    count_per_point = int(data.get('case_count_per_point', 1))
+    case_design_methods = data.get('case_design_methods', [])
+    case_categories = data.get('case_categories', [])
+    context = data.get('context', '')
+    auto_review = bool(data.get('auto_review', False))
+
+    logger.info(f"按测试点生成用例：测试点 {len(test_points)} 个，每点 {count_per_point} 条，"
+                f"模型 {llm_provider}，质量闭环 {auto_review}")
+
+    try:
+        llm_service = LLMServiceFactory.create(llm_provider)
+        generator = TestPointCaseGenerator(
+            llm_service=llm_service,
+            knowledge_service=knowledge_service,
+            case_design_methods=case_design_methods,
+            case_categories=case_categories,
+            count_per_point=count_per_point,
+            auto_review=auto_review,
+        )
+        result = await generator.generate(test_points, context=context)
+        return JsonResponse({
+            'success': True,
+            'test_cases': result['test_cases'],
+            'failed_points': result['failed_points'],
+            'stats': result['stats'],
+        })
+    except Exception as e:
+        logger.error(f"按测试点生成用例失败: {str(e)}", exc_info=True)
+        return JsonResponse({'success': False, 'message': str(e)}, status=500)
+
+
+@login_required
 @require_http_methods(["POST"])
 def save_test_case(request):
     """保存测试用例"""
@@ -124,29 +183,44 @@ def save_test_case(request):
         # 准备批量创建的测试用例列表
         test_cases_to_create = []
         
+        # LLM 返回的优先级（高/中/低）映射到模型的 p0-p3
+        priority_map = {'高': 'p1', '中': 'p2', '低': 'p3',
+                        'P0': 'p0', 'P1': 'p1', 'P2': 'p2', 'P3': 'p3'}
+
         # 遍历测试用例数据，创建TestCase实例
         for index, test_case in enumerate(test_cases_list, 1):
+            point_title = test_case.get('test_point_title', '')
+            point_id = test_case.get('test_point_id', '')
+            # 有测试点来源时，标题带上它，便于追溯用例由哪个测试点产出
+            title = f"{point_id} {point_title}-{index}".strip() if point_title else f"测试用例-{index}"
             test_case_instance = TestCase(
-                title=f"测试用例-{index}",  # 可以根据需求调整标题格式
+                title=title[:200],
                 description=test_case.get('description', ''),
                 test_steps='\n'.join(test_case.get('test_steps', [])),
                 expected_results='\n'.join(test_case.get('expected_results', [])),
-                requirements=requirement,
+                requirements=requirement or '',
                 llm_provider=llm_provider,
-                status='pending'  # 默认状态为待评审
-                # created_by=request.user  # 如果需要记录创建用户，取消注释此行
+                feature=point_title[:100],
+                priority=priority_map.get(str(test_case.get('priority', '')).strip(), ''),
+                status='pending',  # 默认状态为待评审
+                # 记录创建人：组员数据隔离要靠这个字段判断归属。
+                # 之前这里是注释掉的，导致所有用例都没有归属，隔离无从谈起。
+                created_by=request.user if request.user.is_authenticated else None
             )
             test_cases_to_create.append(test_case_instance)
-        
-        # 批量创建测试用例
-        created_test_cases = TestCase.objects.bulk_create(test_cases_to_create)
-        
-        logger.info(f"成功保存 {len(created_test_cases)} 条测试用例")
-        
+
+        # 逐条创建：bulk_create 在 MySQL 上不回填主键，导致返回的 id 全是 null
+        created_ids = []
+        for instance in test_cases_to_create:
+            instance.save()
+            created_ids.append(instance.id)
+
+        logger.info(f"成功保存 {len(created_ids)} 条测试用例")
+
         return JsonResponse({
             'success': True,
-            'message': f'成功保存 {len(created_test_cases)} 条测试用例',
-            'test_case_id': [case.id for case in created_test_cases]
+            'message': f'成功保存 {len(created_ids)} 条测试用例',
+            'test_case_id': created_ids
         })
         
     except json.JSONDecodeError:

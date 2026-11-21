@@ -1,4 +1,5 @@
 import os
+from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from apps.utils.logger_manager import get_logger
 from apps.ai_agents.prd_analyzer.analyser import PrdAnalyserAgent
@@ -29,6 +30,7 @@ llm_service = LLMServiceFactory.create(
 logger = get_logger(__name__)
 
 
+@login_required
 def prd_analyzer(request):
     """从PRD文件中提取测试点&测试场景"""
     if request.method == 'GET':
@@ -37,12 +39,13 @@ def prd_analyzer(request):
         if 'single_file' in request.FILES:  # 修改这里匹配前端的 name 属性
             uploaded_file = request.FILES['single_file']  # 修改这里匹配前端的 name 属性
             file_path = os.path.join(settings.MEDIA_ROOT, uploaded_file.name)
-            # 先检查文件是否存在
+            # 同名文件直接覆盖（原来直接报错"文件已存在"，反复上传同一份文档时很别扭）
             if os.path.exists(file_path):
-                return JsonResponse({
-                    'success': False,
-                    'error': '文件已存在'
-                })
+                logger.info(f"检测到同名文件，将覆盖: {file_path}")
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    logger.warning(f"删除旧文件失败（继续尝试覆盖）: {e}")
             logger.info(f"Uploaded file: {uploaded_file}")
             if not uploaded_file:
                 return JsonResponse({'success': False, 'error': '未接收到文件'})
@@ -61,11 +64,18 @@ def prd_analyzer(request):
                     f.write(chunk)
             logger.info(f"临时文件保存成功, 文件保存路径: {file_path}")
             #3. 处理文件
-            word_to_markdown(file_path, file_path.replace('.docx', '.md'))
-            #读取出转化后md文件的内容
-            with open(file_path.replace('.docx', '.md'), 'r', encoding='utf-8') as f:
-                prd_content = f.read()
-            logger.info(f"PRD内容: {prd_content}")
+            md_path = file_path.replace('.docx', '.md')
+            try:
+                word_to_markdown(file_path, md_path)
+                with open(md_path, 'r', encoding='utf-8') as f:
+                    prd_content = f.read()
+            except Exception as e:
+                logger.error(f"PRD 文档解析失败: {e}", exc_info=True)
+                return JsonResponse({
+                    'success': False,
+                    'error': f'文档解析失败：{e}'
+                })
+            logger.info(f"PRD内容长度: {len(prd_content)} 字符")
             #调用PRD分析器
             analyser = PrdAnalyserAgent(llm_service=llm_service)
             result = analyser.analyse(prd_content)

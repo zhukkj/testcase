@@ -56,10 +56,10 @@ INSTALLED_APPS = [
     # 'apps.knowledge',
     'apps.knowledge.apps.KnowledgeConfig',
     'apps.ai_agents.iface_case_generator.apps.IfaceCaseGeneratorConfig',
-    'apps.ai_agents.java_code_analyzer.apps.JavaCodeAnalyzerConfig',
     'apps.ai_agents.prd_analyzer.apps.PrdAnalyzerConfig',
     'apps.ai_agents.test_case_generator.apps.TestCaseGeneratorConfig',
     'apps.ai_agents.test_case_reviewer.apps.TestCaseReviewerConfig',
+    'apps.ai_agents.kb_chat.apps.KbChatConfig',
 
 ]
 
@@ -86,6 +86,8 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                # 侧边栏要显示「admin · 测试组长」，每个视图传太啰嗦
+                'apps.core.context_processors.user_role',
             ],
         },
     },
@@ -98,18 +100,13 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'test_brain_db',
-        #----本地开发环境数据库配置----
-        # 'USER': 'root',
-        # 'PASSWORD': 'test123456',
-        # 'HOST': 'localhost',
-        #----本地开发环境数据库配置----
-
-        #----bj-uat环境数据库配置----
-        'USER': '',
-        'PASSWORD': '',
-        'HOST': '',
-        #----bj-uat环境数据库配置----
+        'USER': 'root',
+        'PASSWORD': '12345678',
+        'HOST': '127.0.0.1',
         'PORT': '3306',
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
     }
 }
 
@@ -147,16 +144,11 @@ LLM_PROVIDERS = {
     'default_provider': 'deepseek',
     'deepseek': {
         'name': 'DeepSeek',
-        # 'model': 'deepseek-chat', #可以切换, deepseek-reasoner即【深度思考】模式, 可能会稍微慢一些
-        # 'api_base': 'https://api.deepseek.com/v1', #deepseek官网base_url
+        'model': 'deepseek-chat', #可以切换, deepseek-reasoner即【深度思考】模式, 可能会稍微慢一些
+        'base_url': 'https://api.deepseek.com/v1', #deepseek官网base_url
 
-        # ----使用AI团队部署在阿里云上的deepseek相关配置信息----
-        'model': 'deepseek-v3.1',
-        'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1', #AI团队使用的阿里云base_url
-        # ----使用AI团队部署在阿里云上的deepseek相关配置信息----
-        
         'temperature': 0.7,
-        'max_tokens': 128000,
+        'max_tokens': 8000,
     },
     'qwen': {
         'name': '通义千问',
@@ -171,37 +163,28 @@ AGENT_LLM_DEFAULTS = {
     "test_case_generator":  {"provider": "deepseek"},
     "test_case_reviewer":   {"provider": "deepseek"},
     "prd_analyzer":         {"provider": "deepseek"},
-    "java_code_analyzer":   {"provider": "deepseek"},
     "iface_case_generator": {"provider": "deepseek"},
+    "kb_chat":              {"provider": "deepseek"},
 }
 
 # 向量数据库配置
 VECTOR_DB_CONFIG = {
-    'host': '172.16.50.57', # 
+    'host': '127.0.0.1', # 本地 Docker 起的 Milvus
     'port': '19530',
-    'db_name': 'qa_knowledge',
+    'db_name': 'default',
     'collection_name': 'vv_knowledge_collection',
 }
 
-# java源码分析服务调用地址
-# JAVA_ANALYZER_SERVICE_URL = "http://localhost:8089" #调用本地服务
-JAVA_ANALYZER_SERVICE_URL = "http://java-analyzer:80" #bj-uat服务间调用
-# JAVA_ANALYZER_SERVICE_URL = "http://172.20.214.59:8089" #本地开发调用bj-uat服务,服务每次部署ip会变
+# 嵌入模型本地权重路径（避免联网下载 2.2GB）
+EMBEDDING_MODEL_PATH = str(BASE_DIR / 'models' / 'bge-m3')
 
-# Java 项目配置
-JAVA_PROJECTS_BASE_DIR = "../"  # Java 项目基础目录
-PROJECT_ID_REPO_MAPPING = {
-    
-    # 可以继续添加更多项目
-}
+# 知识库检索的最低余弦相似度。bge-m3 下中文相关文本通常落在 0.4~0.7，
+# 原来硬编码 0.6 会把大部分有效片段筛掉
+RAG_MIN_SCORE = 0.35
 
-# Git 凭据配置（用于内部GitLab）
-GIT_CREDENTIALS = {
-    'username': '',  # 替换为实际用户名
-    'password': '',  # 替换为实际密码或访问令牌
-    # 或者使用访问令牌（推荐）
-    # 'token': 'your_gitlab_access_token',
-}
+# 人工评分与 AI 评分的允许偏差（0-10 分制）。
+# 超过这个差值说明 AI 评审结论不可信，列表里会把该用例标为「无效」并加下划线。
+SCORE_GAP_THRESHOLD = 3.0
 
 # Hugging Face 的tokenizers库使用了多进程机制;
 # 在自己的逻辑中使用时，需要注意在进程fork之前不要使用tokenizers库,否则可能会引起死锁
@@ -209,8 +192,29 @@ GIT_CREDENTIALS = {
 os.environ["TOKENIZERS_PARALLELISM"] = "false" 
 
 
+# 登录/登出配置（启用鉴权后未登录会被重定向到登录页）
+LOGIN_URL = '/accounts/login/'
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/accounts/login/'
+
+# 注册为「测试组长」需要的邀请码。
+# 组长能删用例这类破坏性操作，不能让任何人自助注册成组长；
+# 内部工具用固定邀请码足够，真要严格就改成后台手动分配。
+TEAM_LEAD_INVITE_CODE = os.getenv('TEAM_LEAD_INVITE_CODE', 'TESTBRAIN-LEAD')
+
+# 日志配置
+LOG_DIR = os.path.join(BASE_DIR, 'logs')
+LOG_LEVEL = 'INFO'
+# 日志文件名带启动时间戳，如 logs/2026-11-21_15-43-11.log
+LOG_FILENAME_WITH_TIMESTAMP = True
+LOG_TIMESTAMP_FORMAT = '%Y-%m-%d_%H-%M-%S'
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
+# 是否给每个模块单独建日志文件；False=统一写进 {时间戳}.log
+LOG_PER_MODULE_FILES = False
+
 # 向量模型提供商配置: "local"(本地BGE-M3) | "aliyun"(阿里云text-embedding-v4)
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "aliyun")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")
 
 # 阿里云向量模型配置
 ALIYUN_EMBEDDING_CONFIG = {

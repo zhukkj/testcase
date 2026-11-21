@@ -123,9 +123,12 @@ class APITestCaseGeneratorAgent:
             "id": "TC-001",
             "name": "用例名称(接口名称_测试点描述, ≤40字)",
             "description": "用例描述(≤60字, 可选)",
-            "request_body_json": { 
-                "param_name": "要测试的参数名(如: isVirtually)",
-                "param_value": "测试用的参数值(如: 1)"     
+            # request_body_json 是「整个请求体对象」：键=参数名，值=该参数的测试值。
+            # 不能再写成 param_name/param_value 单对——那段文本会被原样复制成请求体，
+            # 合并后 jsonValue 变成 {"param_name": "...", "param_value": "..."}，用例直接作废。
+            "request_body_json": {
+                "参数名(如: productId)": "该参数的测试值(如: SKU-1001)",
+                "参数名(如: quantity)": "该参数的测试值(如: 0)"
             },
             "request_query": [
                 {

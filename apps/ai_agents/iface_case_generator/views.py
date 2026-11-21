@@ -1,5 +1,6 @@
 from apps.ai_agents.iface_case_generator.iface_case_generator import parse_api_definitions,generate_test_cases_for_apis
 
+from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.http import JsonResponse, FileResponse
 from apps.utils.progress_registry import get_progress as get_task_progress
@@ -23,6 +24,7 @@ llm_config = getattr(settings, 'LLM_PROVIDERS', {})
 DEFAULT_PROVIDER, PROVIDERS = get_agent_llm_configs("iface_case_generator")
 
 
+@login_required
 def iface_case_generator(request):
     """
     页面-接口case生成页面视图函数
@@ -174,6 +176,7 @@ def get_testcase_rule_template(request):
         return JsonResponse({'success': False, 'message': str(e)})
 
 
+@login_required
 def download_file(request):
     """文件下载视图"""
     file_path = request.GET.get('file_path')

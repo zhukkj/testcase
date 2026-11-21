@@ -85,3 +85,57 @@ class TestCaseGeneratorPrompt:
             case_count=case_count,
             knowledge_context=knowledge_prompt
         )
+
+
+class TestPointCasePrompt:
+    """按测试点生成用例的提示词
+
+    与 TestCaseGeneratorPrompt 的区别：
+    - 输入粒度从「整段需求」变成「单个测试点 + 该点的测试场景清单」
+    - 强约束「列出多少场景就要覆盖多少场景」，用于保证覆盖率
+    """
+
+    def __init__(self):
+        config_path = Path(__file__).parent / "configs" / "point_prompt_config.yaml"
+        with open(config_path, "r", encoding="utf-8") as f:
+            self.config = yaml.safe_load(f)
+
+        system_vars = {
+            'role': self.config['role'],
+            'capabilities': self.config['capabilities'],
+            'test_types': '、'.join(self.config.get('test_types') or
+                                   ['功能测试', '性能测试', '兼容性测试', '安全性测试'])
+        }
+        system_template = self.config['system_template'].format(**system_vars)
+
+        self.prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template(system_template),
+            HumanMessagePromptTemplate.from_template(self.config['human_template']),
+        ])
+
+    def format_messages(self, point_id: str, point_title: str, point_description: str,
+                        scenarios: list, context: str = "", case_count: int = 1,
+                        case_design_methods: str = "", case_categories: str = "",
+                        knowledge_context: str = "") -> list:
+        scenarios_text = "\n".join(
+            f"  - [{s.get('id', '')}] {s.get('title', '')}：{s.get('description', '')}"
+            for s in scenarios
+        ) or "  - （该测试点未给出细化场景，请自行补齐关键场景）"
+
+        knowledge_prompt = (
+            f"参考以下知识库内容（团队规范/历史用例）：\n{knowledge_context}"
+            if knowledge_context
+            else "根据你的专业知识"
+        )
+
+        return self.prompt_template.format_messages(
+            point_id=point_id,
+            point_title=point_title,
+            point_description=point_description,
+            scenarios=scenarios_text,
+            context=context or "（无额外背景）",
+            case_count=case_count,
+            case_design_methods=case_design_methods or "所有适用的测试用例设计方法",
+            case_categories=case_categories or "所有适用的测试类型",
+            knowledge_context=knowledge_prompt,
+        )

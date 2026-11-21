@@ -1,7 +1,9 @@
 import os
 import logging
 import logging.handlers
+import re
 import threading
+from datetime import datetime
 from pathlib import Path
 from django.conf import settings
 from contextvars import ContextVar
@@ -96,6 +98,37 @@ LOG_LEVELS = {
     'CRITICAL': logging.CRITICAL
 }
 
+class SecretRedactFilter(logging.Filter):
+    """日志脱敏：把 API Key / Token 之类的敏感串替换成掩码。
+
+    为什么需要：LLM 服务初始化时会把完整配置打进日志，
+    一旦日志被分享、提交仓库或截图演示，Key 就泄露了。
+    """
+
+    # sk- 开头的密钥（OpenAI/DeepSeek/Qwen 都是这个格式）、Bearer Token、
+    # 以及 api_key=xxx / 'api_key': 'xxx' 这类键值对
+    PATTERNS = [
+        (re.compile(r'(sk-[A-Za-z0-9_\-]{6,})'), lambda m: m.group(1)[:6] + '***REDACTED***'),
+        (re.compile(r'(Bearer\s+)[A-Za-z0-9_\-\.]{10,}', re.IGNORECASE), r'\1***REDACTED***'),
+        (re.compile(r'((?:api[_-]?key|access[_-]?token|secret)["\']?\s*[:=]\s*["\']?)([^"\',\s}]{6,})',
+                    re.IGNORECASE), r'\1***REDACTED***'),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = message
+        for pattern, repl in self.PATTERNS:
+            redacted = pattern.sub(repl, redacted)
+        if redacted != message:
+            # 已经格式化过，清空 args 避免二次插值报错
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
 class LogManager:
     """统一的日志管理器"""
     
@@ -120,10 +153,17 @@ class LogManager:
         self.log_dir = getattr(settings, 'LOG_DIR', 'logs')
         self.max_bytes = getattr(settings, 'LOG_MAX_BYTES', 10 * 1024 * 1024)  # 10MB
         self.backup_count = getattr(settings, 'LOG_BACKUP_COUNT', 5)
-        
+
+        # 日志文件名是否带启动时间戳（形如 2026-11-21_15-43-11.log）
+        self.filename_with_time = getattr(settings, 'LOG_FILENAME_WITH_TIMESTAMP', True)
+        # 本次进程启动时间，作为日志文件名的一部分，便于按次排查
+        self.run_stamp = datetime.now().strftime(
+            getattr(settings, 'LOG_TIMESTAMP_FORMAT', '%Y-%m-%d_%H-%M-%S')
+        )
+
         # 创建日志目录
-        Path(self.log_dir).mkdir(exist_ok=True)
-        
+        Path(self.log_dir).mkdir(parents=True, exist_ok=True)
+
         # 配置根日志记录器
         self._configure_root_logger()
         
@@ -157,7 +197,7 @@ class LogManager:
         root_logger.addHandler(console_handler)
         
         # 添加文件处理器 - 所有日志
-        all_log_file = os.path.join(self.log_dir, 'all.log')
+        all_log_file = self._build_log_path('')
         file_handler = logging.handlers.RotatingFileHandler(
             all_log_file,
             maxBytes=self.max_bytes,
@@ -171,7 +211,7 @@ class LogManager:
         root_logger.addHandler(file_handler)
         
         # 添加文件处理器 - 仅错误日志
-        error_log_file = os.path.join(self.log_dir, 'error.log')
+        error_log_file = self._build_log_path('error')
         error_handler = logging.handlers.RotatingFileHandler(
             error_log_file,
             maxBytes=self.max_bytes,
@@ -190,37 +230,65 @@ class LogManager:
             '%(asctime)s - %(name)s - %(levelname)s - [thread=%(thread)d %(threadName)s] - [task_id=%(task_id)s] - %(message)s'
         ))
         root_logger.addHandler(mirror_handler)
+
+        # 所有输出通道统一脱敏（控制台 / 全量日志 / 错误日志 / 前端镜像）
+        redact_filter = SecretRedactFilter()
+        for handler in root_logger.handlers:
+            handler.addFilter(redact_filter)
     
+    def _build_log_path(self, name: str) -> str:
+        """按配置生成日志文件路径。
+
+        filename_with_time=True 时：
+            logs/2026-11-21_15-43-11.log          （全量日志）
+            logs/2026-11-21_15-43-11_error.log    （错误日志）
+            logs/2026-11-21_15-43-11_llm.log      （模块日志）
+        False 时退回原来的 all.log / error.log / {module}.log。
+        """
+        if self.filename_with_time:
+            filename = f'{self.run_stamp}_{name}.log' if name else f'{self.run_stamp}.log'
+        else:
+            filename = f'{name}.log' if name else 'all.log'
+        return os.path.join(self.log_dir, filename)
+
     def _get_logger(self, name):
-        """获取指定名称的日志记录器"""
+        """获取指定名称的日志记录器
+
+        默认（LOG_PER_MODULE_FILES=False）不为每个模块单独建文件，
+        统一冒泡到根记录器，写入「时间戳.log」这一个文件；
+        需要按模块拆分时把 LOG_PER_MODULE_FILES 打开即可。
+        """
         logger = logging.getLogger(name)
-        
-        # 为特定模块创建日志文件
-        log_file = os.path.join(self.log_dir, f'{name}.log')
-        handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            maxBytes=self.max_bytes,
-            backupCount=self.backup_count
-        )
-        handler.setLevel(self.log_level)
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - [thread=%(thread)d %(threadName)s] - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        
-        # 清除现有处理器
+        logger.setLevel(self.log_level)
+
+        # 清除现有处理器，避免重复输出
         for h in logger.handlers[:]:
             logger.removeHandler(h)
-            
-        logger.addHandler(handler)
-        
+
+        if getattr(settings, 'LOG_PER_MODULE_FILES', False):
+            # 为特定模块创建独立日志文件
+            log_file = self._build_log_path(name)
+            handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=self.max_bytes,
+                backupCount=self.backup_count
+            )
+            handler.setLevel(self.log_level)
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - [thread=%(thread)d %(threadName)s] - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+
         # 添加任务上下文过滤器
         task_filter = TaskContextFilter()
         logger.addFilter(task_filter)
-        
-        # 为处理器也添加过滤器
-        handler.addFilter(task_filter)
-        
+
+        # 模块独立文件模式下，给处理器也加上过滤器
+        if getattr(settings, 'LOG_PER_MODULE_FILES', False):
+            for h in logger.handlers:
+                h.addFilter(task_filter)
+
         return logger
     
     def get_logger(self, name):

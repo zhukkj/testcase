@@ -6,9 +6,50 @@
 {% block content %}
 <div class="card">
     <div class="card-header">
-        <span style="font-size: 1.2em; color: #d93025; font-style: italic;">如果要生成跟公司业务更贴合的测试用例，请先把项目相关文档上传到知识库，该过程大概耗时几分钟！</span>
+        <span style="color: #6b7280; font-size: 13px;">
+            <i class="fas fa-lightbulb" style="color: #f59e0b;"></i>
+            想让用例更贴合公司业务？先把项目文档上传到知识库，生成时会自动检索增强（首次上传需几分钟做向量化）。
+        </span>
     </div>
     <div class="card-body">
+        <!-- 测试点模式：从 PRD 分析页带入 -->
+        <div id="point-mode-panel" class="card mb-3 border-primary" style="display: none;">
+            <div class="card-header d-flex justify-content-between align-items-center bg-white">
+                <span>
+                    已从 PRD 分析带入 <strong id="point-count" class="text-primary">0</strong> 个测试点
+                    <small class="text-muted">（可编辑：删除 / 改标题 / 调优先级 / 合并重复点）</small>
+                </span>
+                <span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetPointMode()">重置</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearPointMode()">清除</button>
+                </span>
+            </div>
+            <div class="card-body">
+                <div class="row mb-2">
+                    <div class="col-md-4">
+                        <label for="count-per-point">每个测试点生成条数:</label>
+                        <select class="form-control" id="count-per-point">
+                            <option value="1">1条</option>
+                            <option value="2">2条</option>
+                            <option value="3">3条</option>
+                        </select>
+                    </div>
+                    <div class="col-md-8">
+                        <label>预计产出:</label>
+                        <div id="estimate-total" class="form-control-plaintext text-primary"></div>
+                    </div>
+                </div>
+                <div class="form-check mb-2">
+                    <input type="checkbox" id="auto-review" class="form-check-input">
+                    <label class="form-check-label" for="auto-review">
+                        启用质量闭环（生成后自动评分，低于 6 分的带评审意见重生成一次）
+                        <small class="text-muted">更慢、更耗 token，但质量更稳</small>
+                    </label>
+                </div>
+                <div id="point-list" class="point-list small" style="max-height: 340px; overflow-y: auto;"></div>
+            </div>
+        </div>
+
         <form id="generate-form" method="post">
             {% csrf_token %}
             

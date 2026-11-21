@@ -4,6 +4,7 @@ import json
 from apps.llm.base import BaseLLMService
 from apps.knowledge.service import KnowledgeService
 from .prompts import TestCaseGeneratorPrompt
+from apps.utils.dedup import dedup_test_cases
 from apps.utils.logger_manager import get_logger
 import re
 class TestCaseGeneratorAgent:
@@ -62,6 +63,9 @@ class TestCaseGeneratorAgent:
             if len(valid_test_cases) > self.case_count:
                 self.logger.warning(f"LLM 超量生成：期望 {self.case_count} 条，但拿到 {len(valid_test_cases)} 条，自动裁剪。")
                 valid_test_cases = valid_test_cases[: self.case_count]
+
+            # 语义去重：模型常给出措辞不同但实质相同的用例
+            valid_test_cases = self._dedup(valid_test_cases)
             return valid_test_cases
             
         except Exception as e:
@@ -114,6 +118,18 @@ class TestCaseGeneratorAgent:
         except Exception as e:
             raise ValueError(f"无法解析生成的测试用例: {str(e)}\n原始响应: {result}")
     
+    def _dedup(self, test_cases):
+        """语义去重，失败不影响正常返回"""
+        try:
+            embedder = getattr(self.knowledge_service, 'embedder', None)
+            if embedder is None:
+                return test_cases
+            result = dedup_test_cases(test_cases, embedder)
+            return result['test_cases']
+        except Exception as e:
+            self.logger.warning(f"用例去重失败，保留原结果: {e}")
+            return test_cases
+
     def _get_knowledge_context(self, input_text: str) -> str:
         """获取相关知识上下文"""
         try:

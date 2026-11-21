@@ -131,13 +131,53 @@ class MilvusVectorStore:
         collection.insert(safe_data)
         collection.flush()
     
+    def list_sources(self, limit: int = 16384) -> List[Dict[str, Any]]:
+        """列出知识库中的所有来源文档（按 source 聚合片段数）
+
+        Returns:
+            [{source, doc_type, chunks, upload_time}, ...] 按上传时间倒序
+        """
+        collection = Collection(self.collection_name)
+        collection.load()
+
+        rows = collection.query(
+            expr='chunk_id != ""',
+            output_fields=["source", "doc_type", "upload_time"],
+            limit=limit,
+        )
+
+        aggregated: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            source = row.get("source") or "（未知来源）"
+            item = aggregated.setdefault(source, {
+                "source": source,
+                "doc_type": row.get("doc_type", ""),
+                "chunks": 0,
+                "upload_time": row.get("upload_time", ""),
+            })
+            item["chunks"] += 1
+            upload_time = row.get("upload_time", "")
+            if upload_time and upload_time > item["upload_time"]:
+                item["upload_time"] = upload_time
+
+        return sorted(aggregated.values(), key=lambda x: x["upload_time"], reverse=True)
+
+    def count_entities(self) -> int:
+        """知识库中的片段总数"""
+        collection = Collection(self.collection_name)
+        try:
+            return int(collection.num_entities)
+        except Exception:
+            return 0
+
     def delete_by_source(self, source_path: str):
         """根据文件路径删除文档的所有记录"""
         logger.info(f"开始删除文件 {source_path} 的向量记录")
         collection = Collection(self.collection_name)
-        
+
         try:
-            # 构建删除表达式：根据source字段删除
+            # Milvus 要求 collection 处于 loaded 状态才能执行 delete
+            collection.load()
             expr = f'source == "{source_path}"'
             collection.delete(expr)
             collection.flush()

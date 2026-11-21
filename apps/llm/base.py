@@ -116,7 +116,12 @@ class LLMServiceFactory:
         }
         
         # 打印最终配置（调试用）
-        logger.info(f"Final config for {provider}: {final_config}")
+        # 注意：必须打码，之前这里直接把完整 api_key 打了个明文出来
+        safe_config = {
+            k: ('***' + str(v)[-4:] if k == 'api_key' and v else v)
+            for k, v in final_config.items() if k != 'callbacks'
+        }
+        logger.info(f"Final config for {provider}: {safe_config}")
         
         # 根据提供商创建相应的服务实例
         if provider.lower() == "deepseek":

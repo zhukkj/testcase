@@ -10,7 +10,7 @@
     <div class="card-body">
         <div class="row">
             <div class="col-md-3">
-                <div class="card">
+                <div class="card stat-card">
                     <div class="card-body text-center">
                         <h3>{{ total_test_cases }}</h3>
                         <p class="mb-0">总测试用例数</p>
@@ -18,7 +18,7 @@
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card">
+                <div class="card stat-card">
                     <div class="card-body text-center">
                         <h3>{{ pending_count }}</h3>
                         <p class="mb-0">待评审</p>
@@ -26,7 +26,7 @@
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card">
+                <div class="card stat-card">
                     <div class="card-body text-center">
                         <h3>{{ approved_count }}</h3>
                         <p class="mb-0">评审通过</p>
@@ -34,7 +34,7 @@
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card">
+                <div class="card stat-card">
                     <div class="card-body text-center">
                         <h3>{{ rejected_count }}</h3>
                         <p class="mb-0">评审未通过</p>
@@ -44,4 +44,108 @@
         </div>
     </div>
 </div>
-{% endblock %} 
+
+<!-- ===== 测试报告 ===== -->
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>测试报告 · 评审结果分布</span>
+        <small class="text-muted">
+            {% if last_review_at %}最近评审：{{ last_review_at|date:"Y-m-d H:i" }}{% else %}暂无评审记录{% endif %}
+        </small>
+    </div>
+    <div class="card-body">
+        {% if report_empty %}
+            <div class="empty-state">
+                还没有测试用例。先去「测试用例生成」造几条，这里就会有报告了。
+            </div>
+        {% else %}
+        <div class="row align-items-center">
+            <!-- 环形图 -->
+            <div class="col-md-4">
+                <div class="report-chart">
+                    <svg viewBox="0 0 200 200" class="report-donut" role="img"
+                         aria-label="评审结果分布：通过 {{ approved_count }} 条，未通过 {{ rejected_count }} 条，待评审 {{ pending_count }} 条">
+                        <circle cx="100" cy="100" r="70" fill="none" stroke="#f1f2f6" stroke-width="26"/>
+                        {% for seg in report_segments %}
+                        <circle cx="100" cy="100" r="70" fill="none"
+                                stroke="{{ seg.color }}" stroke-width="26"
+                                stroke-dasharray="{{ seg.dash }} {{ seg.gap }}"
+                                stroke-dashoffset="{{ seg.offset }}"
+                                transform="rotate(-90 100 100)"
+                                stroke-linecap="butt">
+                            <title>{{ seg.label }}：{{ seg.value }} 条（{{ seg.percent }}%）</title>
+                        </circle>
+                        {% endfor %}
+                        <text x="100" y="95" text-anchor="middle" class="donut-value">{{ pass_rate }}%</text>
+                        <text x="100" y="116" text-anchor="middle" class="donut-caption">评审通过率</text>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- 图例 + 指标 -->
+            <div class="col-md-8">
+                <ul class="report-legend">
+                    {% for seg in report_segments %}
+                    <li>
+                        <span class="legend-dot" style="background: {{ seg.color }}"></span>
+                        <span class="legend-label">{{ seg.label }}</span>
+                        <span class="legend-bar">
+                            <i style="width: {{ seg.percent }}%; background: {{ seg.color }}"></i>
+                        </span>
+                        <span class="legend-value">{{ seg.value }} 条</span>
+                        <span class="legend-percent">{{ seg.percent }}%</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+
+                <p class="report-note">
+                    通过率 = 通过 /（通过 + 未通过），<strong>未评审的用例不计入分母</strong>——
+                    用全部用例当分母会把「还没评」算成「质量差」。
+                </p>
+
+                <div class="report-metrics">
+                    <div class="metric">
+                        <span class="metric-value">{{ ai_review_coverage }}%</span>
+                        <span class="metric-label">AI 评审覆盖率（{{ ai_reviewed_cases }}/{{ total_test_cases }} 条）</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">
+                            {% if avg_score is not None %}{{ avg_score }}{% else %}—{% endif %}
+                        </span>
+                        <span class="metric-label">AI 平均质量分（10 分制）</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value {% if low_score_count %}metric-warn{% endif %}">{{ low_score_count }}</span>
+                        <span class="metric-label">低于 6 分的用例</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">{{ review_rounds }}</span>
+                        <span class="metric-label">累计评审次数</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value">{{ manual_reviewed_count }}</span>
+                        <span class="metric-label">已人工评审（共 {{ total_test_cases }} 条）</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value {% if invalid_count %}metric-invalid{% endif %}">{{ invalid_count }}</span>
+                        <span class="metric-label">
+                            人工判定无效
+                            {% if avg_gap is not none %}
+                                <br>平均分差 {{ avg_gap }}
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                {% if invalid_count %}
+                <p class="report-note mt-2 mb-0">
+                    <strong>{{ invalid_count }} 条</strong>用例的人工评分与 AI 评分相差 ≥{{ score_gap_threshold }} 分，
+                    已在评审列表中标记为「无效」——这些用例的 AI 评审结论不可信，建议人工重新核查。
+                </p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

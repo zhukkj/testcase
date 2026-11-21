@@ -4,48 +4,265 @@
 {% block title %}TestBrain - 知识库管理{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header">
-        添加知识条目
+<div class="page-head">
+    <h1 class="page-title">知识库管理</h1>
+    <p class="page-desc">
+        这里管理生成用例时会检索的业务文档。上传的文档被切成片段存入向量库，
+        生成用例时按语义相似度召回，让产出更贴合你们自己的规范和历史用例。
+    </p>
+</div>
+
+<!-- 统计概览 -->
+<div class="row" id="stats-row">
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h3 id="stat-docs">-</h3>
+                <p>文档数</p>
+            </div>
+        </div>
     </div>
-    <div class="card-body">
-        <form id="add-knowledge-form">
-            <div class="form-group">
-                <label for="knowledge-title">标题:</label>
-                <input type="text" id="knowledge-title" name="title" class="form-control" required data-error-message="请输入知识条目标题">
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h3 id="stat-chunks">-</h3>
+                <p>向量片段数</p>
             </div>
-            
-            <div class="form-group">
-                <label for="knowledge-content">内容:</label>
-                <textarea id="knowledge-content" name="content" class="form-control" rows="10" required data-error-message="请输入知识条目内容"></textarea>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body">
+                <h3 id="stat-status">-</h3>
+                <p>检索状态</p>
             </div>
-            
-            <div class="text-right">
-                <button type="submit" class="btn btn-primary">添加知识条目</button>
-            </div>
-        </form>
+        </div>
     </div>
 </div>
 
-<div class="card mt-3">
-    <div class="card-header">
-        知识库列表
+<!-- 文档列表 -->
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>已入库文档</span>
+        <span>
+            <a href="/upload/" class="btn btn-sm btn-outline-secondary">上传新文档</a>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadDocuments()">刷新</button>
+        </span>
     </div>
     <div class="card-body">
-        <div class="form-group">
-            <input type="text" id="knowledge-search" class="form-control" placeholder="搜索知识库...">
+        <div id="doc-table-wrap">
+            <div class="text-muted small py-3">加载中...</div>
         </div>
-        
-        <div id="knowledge-list">
-            <div class="text-center">
-                <div class="spinner"></div>
-                <p>加载知识库...</p>
+    </div>
+</div>
+
+<!-- 检索测试 -->
+<div class="card">
+    <div class="card-header">检索测试 <small class="text-muted">（验证某段查询能召回哪些片段）</small></div>
+    <div class="card-body">
+        <div class="input-group mb-3">
+            <input type="text" id="search-input" class="form-control"
+                   placeholder="例如：登录用例的测试账号和边界值要求">
+            <div class="input-group-append">
+                <button class="btn btn-primary" type="button" id="search-btn" onclick="runSearch()">检索</button>
             </div>
         </div>
+        <div id="search-result" class="small"></div>
+    </div>
+</div>
+
+<!-- 手动添加 -->
+<div class="card">
+    <div class="card-header">手动添加知识条目 <small class="text-muted">（适合补充零散的团队约定）</small></div>
+    <div class="card-body">
+        <form id="add-knowledge-form">
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="knowledge-title">标题</label>
+                <input type="text" id="knowledge-title" class="form-control" required
+                       placeholder="例如：测试用例编写规范V3">
+            </div>
+            <div class="form-group">
+                <label for="knowledge-content">内容</label>
+                <textarea id="knowledge-content" class="form-control" rows="6" required
+                          placeholder="粘贴规范正文，会被自动切块入库"></textarea>
+            </div>
+            <div class="text-right">
+                <button type="submit" class="btn btn-primary">添加</button>
+            </div>
+        </form>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
-<script src="{% static 'js/knowledge.js' %}"></script>
-{% endblock %} 
+<script>
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return '';
+}
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+function shortName(source) {
+    if (!source) return '（未知来源）';
+    if (source.startsWith('manual://')) return source.replace('manual://', '') + '（手动添加）';
+    const segs = source.split('/');
+    return segs[segs.length - 1] || source;
+}
+
+async function loadDocuments() {
+    const wrap = document.getElementById('doc-table-wrap');
+    wrap.innerHTML = '<div class="text-muted small py-3">加载中...</div>';
+    try {
+        const resp = await fetch('/api/knowledge-documents/');
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.message || '加载失败');
+
+        document.getElementById('stat-docs').textContent = data.total_documents;
+        document.getElementById('stat-chunks').textContent = data.total_chunks;
+        document.getElementById('stat-status').textContent =
+            data.total_chunks > 0 ? '正常' : '空';
+        document.getElementById('stat-status').style.color =
+            data.total_chunks > 0 ? '#059669' : '#9ca3af';
+
+        if (!data.documents.length) {
+            wrap.innerHTML = `<div class="empty-state">
+                    <p>知识库还是空的。</p>
+                    <p class="small text-muted">先到「项目文档上传到知识库」上传 PRD / 设计文档 / 历史用例。</p>
+                    <a href="/upload/" class="btn btn-primary btn-sm mt-2">去上传</a>
+                </div>`;
+            return;
+        }
+
+        const rows = data.documents.map(d => `
+            <tr>
+                <td title="${esc(d.source)}">${esc(shortName(d.source))}</td>
+                <td><span class="type-badge">${esc(d.doc_type || '-')}</span></td>
+                <td>${d.chunks}</td>
+                <td class="text-muted">${esc((d.upload_time || '').replace('T', ' ').slice(0, 19)) || '-'}</td>
+                <td class="text-right">
+                    <button class="btn btn-xs btn-outline-danger"
+                            onclick="removeDocument('${esc(d.source).replace(/'/g, "\\'")}', '${esc(shortName(d.source)).replace(/'/g, "\\'")}')">
+                        删除
+                    </button>
+                </td>
+            </tr>`).join('');
+
+        wrap.innerHTML = `
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>文档</th><th width="90">类型</th><th width="110">片段数</th>
+                            <th width="180">上传时间</th><th width="80" class="text-right">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+    } catch (e) {
+        wrap.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+    }
+}
+
+async function removeDocument(source, name) {
+    if (!confirm(`确认从知识库删除「${name}」？\n该文档的所有向量片段都会被清理，不可恢复。`)) return;
+    try {
+        const resp = await fetch('/api/knowledge-documents/delete/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ source: source }),
+        });
+        const data = await resp.json();
+        alert(data.success ? data.message : ('删除失败：' + data.message));
+        if (data.success) loadDocuments();
+    } catch (e) {
+        alert('请求失败：' + e.message);
+    }
+}
+
+async function runSearch() {
+    const query = document.getElementById('search-input').value.trim();
+    const box = document.getElementById('search-result');
+    if (!query) {
+        box.innerHTML = '<span class="text-muted">请输入查询内容</span>';
+        return;
+    }
+    box.innerHTML = '<span class="text-muted">检索中...</span>';
+    try {
+        const resp = await fetch('/api/search-knowledge/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ query: query }),
+        });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.message);
+        if (!data.results.length) {
+            box.innerHTML = '<span class="text-muted">没有召回任何片段，可能知识库为空或阈值过高。</span>';
+            return;
+        }
+        box.innerHTML = data.results.map((r, i) => `
+            <div class="search-hit">
+                <div class="d-flex justify-content-between">
+                    <strong>#${i + 1} ${esc(shortName(r.source))}</strong>
+                    <span class="score">相似度 ${(r.score ?? 0).toFixed(4)}</span>
+                </div>
+                <div class="mt-1">${esc((r.content || '').slice(0, 220))}${(r.content || '').length > 220 ? '…' : ''}</div>
+            </div>`).join('');
+    } catch (e) {
+        box.innerHTML = `<span class="text-danger">${esc(e.message)}</span>`;
+    }
+}
+
+document.getElementById('add-knowledge-form').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const title = document.getElementById('knowledge-title').value.trim();
+    const content = document.getElementById('knowledge-content').value.trim();
+    if (!title || !content) return;
+
+    const btn = this.querySelector('button[type=submit]');
+    const origin = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '入库中...';
+    try {
+        const resp = await fetch('/api/add-knowledge/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ title: title, content: content }),
+        });
+        const data = await resp.json();
+        alert(data.success ? data.message : ('添加失败：' + data.message));
+        if (data.success) {
+            document.getElementById('knowledge-title').value = '';
+            document.getElementById('knowledge-content').value = '';
+            loadDocuments();
+        }
+    } catch (err) {
+        alert('请求失败：' + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = origin;
+    }
+});
+
+document.getElementById('search-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+});
+
+loadDocuments();
+</script>
+{% endblock %}

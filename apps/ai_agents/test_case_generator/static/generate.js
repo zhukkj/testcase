@@ -24,6 +24,252 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
+
+    // ===== 测试点模式：接收 PRD 分析页带来的测试点，并支持编辑 =====
+    let pointModePoints = [];      // 当前（可能已被用户编辑过的）测试点
+    let originalPointPayload = null; // 原始快照，用于「重置」
+    let editingIndex = -1;         // 正在编辑的行下标，-1 表示无
+
+    const pointPanel = document.getElementById('point-mode-panel');
+    const pointCountEl = document.getElementById('point-count');
+    const pointListEl = document.getElementById('point-list');
+    const countPerPointEl = document.getElementById('count-per-point');
+    const estimateEl = document.getElementById('estimate-total');
+
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+
+    function loadPointMode() {
+        let payload = null;
+        try {
+            payload = JSON.parse(sessionStorage.getItem('prd_test_points') || 'null');
+        } catch (e) {
+            console.warn('测试点数据解析失败', e);
+        }
+        if (!payload || !payload.test_points || !payload.test_points.length) {
+            return;
+        }
+        originalPointPayload = JSON.parse(JSON.stringify(payload));
+        pointModePoints = payload.test_points;
+        pointPanel.style.display = 'block';
+        pointCountEl.textContent = pointModePoints.length;
+        inputTextLabel.textContent = '整体需求背景（可选，用于补充上下文）:';
+        inputText.placeholder = '可以不填。填写后作为整体背景传给模型，但每个测试点仍会单独生成。';
+        // textarea 带了 required，测试点模式下允许留空，否则浏览器会拦掉提交
+        inputText.removeAttribute('required');
+        renderPointList();
+        updateEstimate();
+    }
+
+    // 把当前编辑结果写回 sessionStorage，刷新页面不丢改动
+    function savePointState() {
+        sessionStorage.setItem('prd_test_points', JSON.stringify({
+            test_points: pointModePoints,
+            summary: (originalPointPayload && originalPointPayload.summary) || {},
+            edited: true,
+            created_at: new Date().toISOString()
+        }));
+        pointCountEl.textContent = pointModePoints.length;
+    }
+
+    function renderPointList() {
+        if (!pointModePoints.length) {
+            pointListEl.innerHTML = '<div class="text-muted py-2">测试点已全部删除，请「重置」或直接切换回需求描述模式。</div>';
+            return;
+        }
+
+        pointListEl.innerHTML = pointModePoints.map((p, i) => {
+            if (i === editingIndex) {
+                return renderEditRow(p, i);
+            }
+            const scenarios = p.scenarios || [];
+            const chips = scenarios.length
+                ? scenarios.map(s => `<span class="scenario-chip" title="${esc(s.description || '')}">
+                        ${esc(s.id || '')} ${esc(s.title || '')}
+                    </span>`).join('')
+                : '<span class="text-muted">无细化场景（生成时由模型自行补齐）</span>';
+
+            return `
+                <div class="point-item" data-idx="${i}">
+                    <div class="point-head">
+                        <code class="point-id">${esc(p.id || '')}</code>
+                        <span class="point-title">${esc(p.title || '')}</span>
+                        <span class="point-meta">${scenarios.length} 个场景</span>
+                        <select class="point-priority" data-idx="${i}" title="优先级">
+                            ${['高', '中', '低'].map(v =>
+                                `<option value="${v}" ${p.priority === v ? 'selected' : ''}>${v}</option>`).join('')}
+                        </select>
+                        <span class="point-actions">
+                            <button type="button" class="btn btn-xs btn-outline-secondary" data-act="edit" data-idx="${i}">编辑</button>
+                            <button type="button" class="btn btn-xs btn-outline-secondary" data-act="merge" data-idx="${i}"
+                                    ${i === 0 ? 'disabled title="第一条没有上一条可合并"' : 'title="把本条的场景并入上一条" '}>并入上条</button>
+                            <button type="button" class="btn btn-xs btn-outline-danger" data-act="del" data-idx="${i}">删除</button>
+                        </span>
+                    </div>
+                    <div class="point-scenarios">${chips}</div>
+                </div>`;
+        }).join('');
+    }
+
+    function renderEditRow(p, i) {
+        const scenarios = p.scenarios || [];
+        const rows = scenarios.map((s, si) => `
+            <div class="d-flex align-items-center mb-1">
+                <code class="mr-2" style="white-space:nowrap;">${esc(s.id || '')}</code>
+                <input class="form-control form-control-sm mr-2" data-field="scenario-title" data-sidx="${si}"
+                       value="${esc(s.title || '')}" placeholder="场景标题">
+                <button type="button" class="btn btn-xs btn-outline-danger" data-act="del-scenario"
+                        data-idx="${i}" data-sidx="${si}">删除</button>
+            </div>`).join('');
+
+        return `
+            <div class="point-item editing" data-idx="${i}">
+                <div class="point-head">
+                    <code class="point-id">${esc(p.id || '')}</code>
+                    <input class="form-control form-control-sm" data-field="title" data-idx="${i}"
+                           value="${esc(p.title || '')}" placeholder="测试点标题">
+                </div>
+                <div class="mt-2">
+                    <textarea class="form-control form-control-sm" rows="2" data-field="description" data-idx="${i}"
+                              placeholder="测试点描述（会作为生成用例的上下文）">${esc(p.description || '')}</textarea>
+                </div>
+                <div class="mt-2">
+                    <div class="small text-muted mb-1">测试场景（删掉不需要的，或新增）</div>
+                    ${rows || '<div class="text-muted small mb-1">暂无场景</div>'}
+                    <button type="button" class="btn btn-xs btn-outline-secondary" data-act="add-scenario" data-idx="${i}">+ 添加场景</button>
+                </div>
+                <div class="mt-2 text-right">
+                    <button type="button" class="btn btn-sm btn-primary" data-act="save" data-idx="${i}">保存</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-act="cancel" data-idx="${i}">取消</button>
+                </div>
+            </div>`;
+    }
+
+    // 事件委托：行的增删改都走这里
+    if (pointListEl) {
+        pointListEl.addEventListener('click', function (e) {
+            const btn = e.target.closest('button[data-act]');
+            if (!btn) return;
+            const act = btn.dataset.act;
+            const idx = parseInt(btn.dataset.idx, 10);
+
+            if (act === 'edit') {
+                editingIndex = idx;
+                renderPointList();
+            } else if (act === 'del') {
+                const p = pointModePoints[idx];
+                if (!confirm(`确认删除测试点「${p.title || p.id}」？`)) return;
+                pointModePoints.splice(idx, 1);
+                editingIndex = -1;
+                savePointState();
+                renderPointList();
+                updateEstimate();
+            } else if (act === 'merge') {
+                if (idx <= 0) return;
+                const prev = pointModePoints[idx - 1];
+                const cur = pointModePoints[idx];
+                prev.scenarios = (prev.scenarios || []).concat(cur.scenarios || []);
+                // 合并后描述也带上，避免丢失信息
+                if (cur.description) {
+                    prev.description = [prev.description, cur.description].filter(Boolean).join('\n');
+                }
+                pointModePoints.splice(idx, 1);
+                editingIndex = -1;
+                savePointState();
+                renderPointList();
+                updateEstimate();
+            } else if (act === 'save') {
+                const item = pointListEl.querySelector(`.point-item[data-idx="${idx}"]`);
+                if (!item) return;
+                const p = pointModePoints[idx];
+                const titleInput = item.querySelector('input[data-field="title"]');
+                const descInput = item.querySelector('textarea[data-field="description"]');
+                p.title = (titleInput?.value || '').trim() || p.title;
+                p.description = (descInput?.value || '').trim();
+
+                // 收集场景标题（保持 id / description / test_type 不变）
+                (p.scenarios || []).forEach((s, si) => {
+                    const input = item.querySelector(`input[data-field="scenario-title"][data-sidx="${si}"]`);
+                    if (input) s.title = input.value.trim() || s.title;
+                });
+                editingIndex = -1;
+                savePointState();
+                renderPointList();
+                updateEstimate();
+            } else if (act === 'cancel') {
+                editingIndex = -1;
+                renderPointList();
+            } else if (act === 'add-scenario') {
+                const p = pointModePoints[idx];
+                p.scenarios = p.scenarios || [];
+                const n = p.scenarios.length + 1;
+                p.scenarios.push({
+                    id: `${p.id || 'TP'}-NEW${n}`,
+                    title: '新场景（请填写）',
+                    description: '',
+                    test_type: '功能测试'
+                });
+                savePointState();
+                renderPointList();
+                updateEstimate();
+            } else if (act === 'del-scenario') {
+                const si = parseInt(btn.dataset.sidx, 10);
+                const p = pointModePoints[idx];
+                p.scenarios.splice(si, 1);
+                savePointState();
+                renderPointList();
+                updateEstimate();
+            }
+        });
+
+        // 优先级下拉直接改
+        pointListEl.addEventListener('change', function (e) {
+            const sel = e.target.closest('select.point-priority');
+            if (!sel) return;
+            const idx = parseInt(sel.dataset.idx, 10);
+            if (pointModePoints[idx]) {
+                pointModePoints[idx].priority = sel.value;
+                savePointState();
+            }
+        });
+    }
+
+    function updateEstimate() {
+        const per = parseInt(countPerPointEl.value, 10) || 1;
+        // 与后端一致：每个点实际条数 = max(每点条数, 该点场景数)
+        const total = pointModePoints.reduce((sum, p) => {
+            const scenarios = (p.scenarios || []).length;
+            return sum + Math.max(per, scenarios || 0 || per);
+        }, 0);
+        estimateEl.textContent = `约 ${total} 条（每点至少 ${per} 条；若该点场景数更多，按场景数生成以保证覆盖）`;
+    }
+
+    window.resetPointMode = function () {
+        if (!originalPointPayload) return;
+        pointModePoints = JSON.parse(JSON.stringify(originalPointPayload.test_points));
+        editingIndex = -1;
+        savePointState();
+        renderPointList();
+        updateEstimate();
+    };
+
+    window.clearPointMode = function () {
+        sessionStorage.removeItem('prd_test_points');
+        pointModePoints = [];
+        originalPointPayload = null;
+        editingIndex = -1;
+        pointPanel.style.display = 'none';
+        inputTextLabel.textContent = '需求描述:';
+        inputText.placeholder = '请输入需求描述...';
+        inputText.setAttribute('required', 'required');
+    };
+
+    if (countPerPointEl) {
+        countPerPointEl.addEventListener('change', updateEstimate);
+    }
+
+    loadPointMode();
     
     // 保存用户选择的大模型到本地存储
     const llmProviderSelect = document.getElementById('llm-provider');
@@ -88,7 +334,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const selectedDesignMethods = Array.from(designMethodsSelect.selectedOptions || []).map(option => option.textContent);
             const selectedCaseCategories = Array.from(caseCategoriesSelect.selectedOptions || []).map(option => option.textContent);
             
-            if (!inputTextValue) {
+            if (!inputTextValue && pointModePoints.length === 0) {
                 showNotification('请输入需求描述', 'error');
                 return;
             }
@@ -112,7 +358,51 @@ document.addEventListener('DOMContentLoaded', function() {
                 case_categories: selectedCaseCategories,
                 case_count: document.getElementById('case_count')?.value || '10'
             };
-            
+
+            // ===== 测试点模式：走逐点生成接口 =====
+            if (pointModePoints.length > 0) {
+                const beforePoints = pointModePoints.length;
+                const payload = {
+                    test_points: pointModePoints,
+                    case_count_per_point: parseInt(countPerPointEl?.value || '1', 10),
+                    llm_provider: requestData.llm_provider,
+                    case_design_methods: selectedDesignMethods,
+                    case_categories: selectedCaseCategories,
+                    context: inputTextValue || '',
+                    auto_review: document.getElementById('auto-review')?.checked || false
+                };
+                console.log(`测试点模式：${beforePoints} 个测试点逐条生成`, payload);
+
+                fetch('/test_case_generator/generate-by-points/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify(payload)
+                })
+                .then(resp => resp.json())
+                .then(data => {
+                    if (loadingIndicator) loadingIndicator.style.display = 'none';
+                    if (generateButton) generateButton.disabled = false;
+
+                    if (!data.success) {
+                        alert('生成失败：' + (data.message || '未知错误'));
+                        return;
+                    }
+                    displayTestCases(data.test_cases || [], data.stats);
+                    // 保存按钮复用原有逻辑，需要这两个 key
+                    sessionStorage.setItem('generatedTestCases', JSON.stringify(data.test_cases || []));
+                    sessionStorage.setItem('inputText', inputTextValue || '');
+                })
+                .catch(err => {
+                    if (loadingIndicator) loadingIndicator.style.display = 'none';
+                    if (generateButton) generateButton.disabled = false;
+                    alert('请求失败：' + err.message);
+                });
+                return;
+            }
+
             console.log('发送的数据:', requestData);
             
             // 发送请求
@@ -181,7 +471,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 显示测试用例
-    function displayTestCases(testCases) {
+    function displayTestCases(testCases, stats) {
         // 获取或创建 resultContainer
         let resultContainer = document.getElementById('result-container');
         if (!resultContainer) {
@@ -204,7 +494,40 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
+        // 用例带 test_point_id 时，说明是「按测试点生成」的，多显示一列来源
+        const showPointCol = testCases.some(tc => tc.test_point_id);
+
+        let statsHtml = '';
+        if (stats) {
+            const parts = [];
+            parts.push(`<strong>覆盖率：${stats.coverage}%</strong>（${stats.covered_points}/${stats.total_points} 个测试点已产出用例）`);
+            parts.push(`共 <strong>${stats.total_cases}</strong> 条用例`);
+            if (stats.dedup_removed) {
+                parts.push(`已合并重复 <strong>${stats.dedup_removed}</strong> 条`);
+            }
+            if (typeof stats.avg_score === 'number' && stats.avg_score > 0) {
+                parts.push(`平均质量分 <strong>${stats.avg_score}</strong>`);
+            }
+            if (stats.low_score_cases) {
+                parts.push(`低于阈值的用例 <strong>${stats.low_score_cases}</strong> 条`);
+            }
+            if (stats.regenerated) {
+                parts.push(`低分重生成 <strong>${stats.regenerated}</strong> 个测试点`);
+            }
+            if (stats.token_usage && stats.token_usage.llm_calls) {
+                const u = stats.token_usage;
+                parts.push(`<span class="text-muted">LLM 调用 ${u.llm_calls} 次，token ${u.total_tokens}</span>`);
+            }
+            const failed = (stats.failed_points || 0) > 0
+                ? `<span class="text-danger">｜失败 ${stats.failed_points} 个</span>` : '';
+            statsHtml = `
+                <div class="alert alert-info">
+                    ${parts.join(' ｜ ')} ${failed}
+                </div>`;
+        }
+
         let html = `
+            ${statsHtml}
             <div class="card">
                 <div class="card-header">
                     <h5 class="mb-0">生成的测试用例</h5>
@@ -215,9 +538,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             <thead class="thead-light">
                                 <tr>
                                     <th width="5%">编号</th>
-                                    <th width="25%">测试用例描述</th>
-                                    <th width="35%">测试步骤</th>
-                                    <th width="35%">预期结果</th>
+                                    ${showPointCol ? '<th width="12%">来源测试点</th>' : ''}
+                                    <th width="23%">测试用例描述</th>
+                                    <th width="30%">测试步骤</th>
+                                    <th width="30%">预期结果</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -236,6 +560,7 @@ document.addEventListener('DOMContentLoaded', function() {
             html += `
                 <tr>
                     <td>${index + 1}</td>
+                    ${showPointCol ? `<td><small>${testCase.test_point_id || ''}<br>${testCase.test_point_title || ''}</small></td>` : ''}
                     <td>${testCase.description || ''}</td>
                     <td>
                         ${testSteps.map(step => `<div class="mb-2">${step}</div>`).join('')}

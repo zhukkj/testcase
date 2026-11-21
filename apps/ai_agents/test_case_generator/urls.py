@@ -10,6 +10,7 @@ urlpatterns = [
     
     # API 路由
     path('save-test-case/', views.save_test_case, name='save_test_case'),
+    path('generate-by-points/', views.generate_by_points, name='generate_by_points'),
 
 
 ]

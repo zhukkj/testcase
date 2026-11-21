@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}TestBrain - 评审复核{% endblock %}
+
+{% block content %}
+{% csrf_token %}
+
+<div class="page-head">
+    <h2 class="page-title">评审复核</h2>
+    <p class="page-desc">
+        AI 评一遍、人评一遍，两边分数相差 ≥{{ threshold }} 分的用例会集中到这里。
+        偏差越大说明 AI 的评审结论越不可信，列表已按差值从大到小排好，从上往下处理即可。
+    </p>
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <h3 class="{% if counts.invalid %}text-danger{% endif %}">{{ counts.invalid }}</h3>
+                <p class="mb-0">偏差用例（待复核）</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <h3>{{ counts.pending }}</h3>
+                <p class="mb-0">待人工评审</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <h3>{{ counts.all }}</h3>
+                <p class="mb-0">已人工评审</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <h3>
+                    {% if avg_gap is not None %}{{ avg_gap }}{% else %}—{% endif %}
+                    {% if max_gap is not None %}
+                        <small class="text-muted" style="font-size:13px;font-weight:400;">/ 最大 {{ max_gap }}</small>
+                    {% endif %}
+                </h3>
+                <p class="mb-0">平均分差</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+        <ul class="nav nav-pills review-scope-nav">
+            <li class="nav-item">
+                <a class="nav-link {% if scope == 'invalid' %}active{% endif %}" href="?scope=invalid">
+                    偏差用例 <span class="scope-count">{{ counts.invalid }}</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if scope == 'pending' %}active{% endif %}" href="?scope=pending">
+                    待人工评审 <span class="scope-count">{{ counts.pending }}</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if scope == 'all' %}active{% endif %}" href="?scope=all">
+                    已人工评审 <span class="scope-count">{{ counts.all }}</span>
+                </a>
+            </li>
+        </ul>
+        <div class="review-tools">
+            <a class="btn btn-sm btn-success" href="api/export-review-sheet/?scope={{ scope }}">
+                导出 Excel
+            </a>
+            <button type="button" class="btn btn-sm btn-primary" data-toggle="modal" data-target="#importModal">
+                导入人工评分
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        {% if cases %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="thead-light">
+                    <tr>
+                        <th style="width: 46%">用例描述</th>
+                        <th style="width: 82px;">AI 评分</th>
+                        <th style="width: 118px;">人工评分</th>
+                        <th style="width: 66px;">差值</th>
+                        <th style="width: 88px;">状态</th>
+                        <th style="width: 80px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for case in cases %}
+                    <tr class="{% if case.is_invalid %}row-invalid{% endif %}">
+                        <td class="review-case-desc">{{ case.description }}</td>
+                        <td>
+                            {% if case.ai_score is not None %}
+                                <span class="ai-score {% if case.ai_score < 6 %}ai-score-low{% else %}ai-score-good{% endif %}">
+                                    {{ case.ai_score }}
+                                </span>
+                            {% else %}
+                                <span class="ai-score-empty">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="manual-cell">
+                            <input type="number" class="manual-score-input"
+                                   data-id="{{ case.id }}"
+                                   min="0" max="10" step="0.5"
+                                   value="{{ case.manual_score|default_if_none:'' }}"
+                                   placeholder="—">
+                            {% if case.is_invalid %}
+                                <span class="invalid-badge" title="与 AI 评分差 {{ case.score_gap }} 分">无效</span>
+                            {% endif %}
+                        </td>
+                        <td class="gap-cell {% if case.is_invalid %}gap-bad{% endif %}">
+                            {% if case.score_gap is not None %}{{ case.score_gap }}{% else %}—{% endif %}
+                        </td>
+                        <td>
+                            {% if case.status == 'approved' %}
+                                <span class="badge badge-success">已通过</span>
+                            {% elif case.status == 'rejected' %}
+                                <span class="badge badge-danger">未通过</span>
+                            {% else %}
+                                <span class="badge badge-warning">待评审</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button type="button" class="btn btn-sm btn-outline-primary reopen-case"
+                                    data-id="{{ case.id }}">查看</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+            <div class="empty-state">
+                {% if scope == 'invalid' %}
+                    没有偏差用例。人工评分与 AI 评分相差都在 {{ threshold }} 分以内。
+                {% elif scope == 'pending' %}
+                    没有待人工评审的用例——所有被 AI 评过的用例都已经有人工评分了。
+                {% else %}
+                    还没有任何用例完成人工评审。
+                {% endif %}
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 导入人工评分 -->
+<div class="modal fade" id="importModal" tabindex="-1" role="dialog" aria-labelledby="importModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="importModalLabel">批量导入人工评分</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="关闭">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <ol class="import-steps">
+                    <li>点「导出 Excel」拿到清单（含用例 ID 和 AI 评分，人工评分列留空）。</li>
+                    <li>线下评审后，在「人工评分」列填 0~10 分，保存。</li>
+                    <li>把文件传回来，或只把「ID + 分数」两列粘到下面文本框。</li>
+                </ol>
+
+                <div class="form-group">
+                    <label for="import-file">上传 Excel / CSV</label>
+                    <input type="file" class="form-control-file" id="import-file" accept=".xlsx,.csv">
+                    <small class="text-muted">支持导出的 xlsx，或两列的 csv（第一列用例ID，第二列分数）。</small>
+                </div>
+
+                <div class="form-group mb-0">
+                    <label for="import-text">或者直接粘贴（每行一条：<code>用例ID,分数</code>）</label>
+                    <textarea class="form-control" id="import-text" rows="5"
+                              placeholder="12,7&#10;13,4.5&#10;14,8"></textarea>
+                    <small class="text-muted">逗号、空格、制表符都能识别；分数留空的行会被跳过（视为没评）。</small>
+                </div>
+
+                <div id="import-result" class="import-result" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="import-submit">开始导入</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'manual_score.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // 复用评审页的详情弹窗
+    document.querySelectorAll('.reopen-case').forEach(btn => {
+        btn.addEventListener('click', function () {
+            window.open(`/test_case_reviewer/case-review-detail/?id=${this.dataset.id}`,
+                'TestCaseReview', 'width=800,height=600,scrollbars=yes,resizable=yes');
+        });
+    });
+
+    const resultEl = document.getElementById('import-result');
+    const submitBtn = document.getElementById('import-submit');
+
+    function showResult(html, cls) {
+        resultEl.style.display = 'block';
+        resultEl.className = 'import-result ' + cls;
+        resultEl.innerHTML = html;
+    }
+
+    submitBtn.addEventListener('click', async function () {
+        const fileInput = document.getElementById('import-file');
+        const textInput = document.getElementById('import-text');
+        const hasFile = fileInput.files && fileInput.files.length > 0;
+        const hasText = textInput.value.trim().length > 0;
+
+        if (!hasFile && !hasText) {
+            showResult('请先选择文件，或粘贴「用例ID,分数」内容。', 'import-warn');
+            return;
+        }
+
+        const form = new FormData();
+        if (hasFile) form.append('file', fileInput.files[0]);
+        if (hasText) form.append('text', textInput.value);
+
+        const token = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        submitBtn.disabled = true;
+        submitBtn.textContent = '导入中…';
+
+        try {
+            const resp = await fetch('/test_case_reviewer/api/import-manual-scores/', {
+                method: 'POST',
+                headers: { 'X-CSRFToken': token },
+                body: form
+            });
+            const data = await resp.json();
+
+            if (!data.success) {
+                showResult('导入失败：' + (data.message || '未知错误'), 'import-error');
+                return;
+            }
+
+            let html = `<strong>更新 ${data.updated} 条</strong>`;
+            if (data.skipped) html += `，跳过 ${data.skipped} 条（未填分数）`;
+            if (data.error_count) html += `，失败 ${data.error_count} 条`;
+            html += `。当前偏差用例 <strong>${data.invalid_count}</strong> 条。`;
+
+            if (data.errors && data.errors.length) {
+                html += '<ul class="import-error-list">' + data.errors.map(
+                    e => `<li>第 ${e.row} 行：${e.reason}</li>`
+                ).join('') + '</ul>';
+            }
+
+            showResult(html, data.error_count ? 'import-warn' : 'import-ok');
+
+            // 有错误的场景不自动刷新，否则用户来不及看错误明细
+            if (data.updated > 0 && !data.error_count) {
+                setTimeout(() => window.location.reload(), 2600);
+            }
+        } catch (err) {
+            showResult('导入失败：' + err.message, 'import-error');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '开始导入';
+        }
+    });
+});
+</script>
+{% endblock %}

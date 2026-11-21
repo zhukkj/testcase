@@ -80,9 +80,11 @@
             width: 100%;
         }
     </style>
+    <!-- 统一主题样式（放在内联样式之后以覆盖默认观感） -->
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body class="{% if not user.is_authenticated %}auth-page{% endif %}">
     <!-- 左侧导航栏 -->
     <nav class="sidebar">
         <!-- 品牌标题 -->
@@ -106,9 +108,15 @@
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if '/test_case_reviewer/' in request.path %}active{% endif %}" href="/test_case_reviewer/">
+                    <a class="nav-link {% if '/test_case_reviewer/' in request.path and 'invalid-cases' not in request.path %}active{% endif %}" href="/test_case_reviewer/">
                         <i class="fas fa-check-circle"></i>
                         测试用例评审
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if '/test_case_reviewer/invalid-cases/' in request.path %}active{% endif %}" href="/test_case_reviewer/invalid-cases/">
+                        <i class="fas fa-balance-scale"></i>
+                        评审复核
                     </a>
                 </li>
                 <li class="nav-item">
@@ -130,18 +138,44 @@
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if '/java_code_analyzer/' in request.path %}active{% endif %}" href="/java_code_analyzer/">
-                        <i class="fas fa-code-branch"></i>
-                        Java源码分析
+                    <a class="nav-link {% if '/knowledge/' in request.path %}active{% endif %}" href="/knowledge/">
+                        <i class="fas fa-book"></i>
+                        知识库管理
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if '/knowledge/' in request.path %}active{% endif %}" href="/knowledge/">
-                        <i class="fas fa-book"></i>
-                        知识库管理(暂时不支持)
+                    <a class="nav-link {% if '/kb_chat/' in request.path %}active{% endif %}" href="/kb_chat/">
+                        <i class="fas fa-comments"></i>
+                        知识库问答
                     </a>
                 </li>
+                {% if is_team_lead %}
+                <li class="nav-item">
+                    <a class="nav-link {% if '/accounts/members/' in request.path %}active{% endif %}" href="/accounts/members/">
+                        <i class="fas fa-users-cog"></i>
+                        成员管理
+                    </a>
+                </li>
+                {% endif %}
             </ul>
+
+            {% if user.is_authenticated %}
+            <div class="px-3 py-2 border-top mt-2 small sidebar-user">
+                <div class="sidebar-user-name">
+                    <i class="fas fa-user"></i>
+                    {{ user.first_name|default:user.username }}
+                </div>
+                {% if current_role_label %}
+                <div class="sidebar-user-role role-{{ current_role }}">
+                    {{ current_role_label }}
+                </div>
+                {% endif %}
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-outline-secondary btn-block">退出登录</button>
+                </form>
+            </div>
+            {% endif %}
         </div>
     </nav>
 

@@ -19,6 +19,48 @@
         textarea {
             resize: vertical;
         }
+
+        /* 评审结论提示 */
+        .review-verdict {
+            margin-top: 10px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13.5px;
+            line-height: 1.6;
+        }
+
+        .review-verdict.verdict-pass {
+            background: #ecfdf5;
+            border-left: 3px solid #10b981;
+            color: #065f46;
+        }
+
+        .review-verdict.verdict-reject {
+            background: #fef2f2;
+            border-left: 3px solid #ef4444;
+            color: #991b1b;
+        }
+
+        .review-verdict.verdict-none {
+            background: #f9fafb;
+            border-left: 3px solid #9ca3af;
+            color: #4b5563;
+        }
+
+        .verdict-score {
+            margin-left: 10px;
+            font-size: 12px;
+            padding: 1px 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .7);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .verdict-detail {
+            margin-top: 4px;
+            font-size: 12px;
+            opacity: .85;
+        }
     </style>
 </head>
 <body>
@@ -94,6 +136,7 @@
                     <div class="form-group">
                         <label for="ai_review_result">AI 评审结果</label>
                         <textarea class="form-control" id="ai_review_result" name="ai_review_result" rows="5" readonly></textarea>
+                        <div id="review_verdict" class="review-verdict" style="display:none;"></div>
                     </div>
 
                     <input type="hidden" id="test_case_id" name="test_case_id">
@@ -168,6 +211,41 @@
         }
 
         // 开始评审按钮点击事件
+        // 把结构化评审结果排版成人能读的文本；解析失败时退回原始返回
+        function formatReview(parsed, raw) {
+            if (!parsed) return raw || '';
+
+            const lines = [];
+            if (parsed.score !== undefined && parsed.score !== null) {
+                lines.push(`评分：${parsed.score} / 10`);
+            }
+            if (parsed.recommendation) {
+                lines.push(`结论：${parsed.recommendation}`);
+            }
+
+            const sections = [
+                ['优点', parsed.strengths],
+                ['问题', parsed.weaknesses],
+                ['改进建议', parsed.suggestions],
+                ['遗漏场景', parsed.missing_scenarios],
+            ];
+            sections.forEach(([title, items]) => {
+                if (Array.isArray(items) && items.length) {
+                    lines.push('');
+                    lines.push(`【${title}】`);
+                    items.forEach(item => lines.push(`· ${item}`));
+                }
+            });
+
+            if (parsed.comments) {
+                lines.push('');
+                lines.push('【总评】');
+                lines.push(parsed.comments);
+            }
+
+            return lines.length ? lines.join('\n') : raw;
+        }
+
         document.getElementById('startReviewBtn').onclick = function() {
             const testCaseId = document.getElementById('test_case_id').value;
             const aiReviewResult = document.getElementById('ai_review_result');
@@ -190,12 +268,57 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // 先更新文本框内容
-                    aiReviewResult.value = data.review_result;
+                    // 结构化结果转成可读文本：直接显示原始 JSON（还带 ``` 围栏）
+                    // 在弹窗里几乎没法看，评审结论要能被人快速扫到
+                    aiReviewResult.value = formatReview(data.parsed, data.review_result);
+
+                    // 结论 + 状态变化提示：单条评审也要让人看到「过没过」
+                    const verdictEl = document.getElementById('review_verdict');
+                    if (verdictEl) {
+                        const verdict = data.verdict;      // approved / rejected / null
+                        const score = data.parsed && data.parsed.score;
+                        let cls = 'verdict-none';
+                        let title = 'AI 未给出明确结论';
+                        let detail = '请人工判断后选择「通过」或「未通过」';
+
+                        if (verdict === 'approved') {
+                            cls = 'verdict-pass';
+                            title = 'AI 评审结论：通过';
+                        } else if (verdict === 'rejected') {
+                            cls = 'verdict-reject';
+                            title = 'AI 评审结论：不通过';
+                        }
+
+                        if (data.status_changed) {
+                            detail = verdict === 'approved'
+                                ? '用例状态已更新为「已通过」'
+                                : '用例状态已更新为「未通过」';
+                        } else if (verdict) {
+                            detail = '用例当前已是该状态，无需变更';
+                        }
+
+                        verdictEl.className = 'review-verdict ' + cls;
+                        verdictEl.style.display = 'block';
+                        verdictEl.innerHTML =
+                            `<strong>${title}</strong>` +
+                            (score !== undefined && score !== null ? `<span class="verdict-score">评分 ${score}</span>` : '') +
+                            `<div class="verdict-detail">${detail}</div>`;
+                    }
+
+                    // 关键：后端已按结论改了状态，下拉框必须同步，
+                    // 否则用户点「保存」会把刚评审出的状态又写回旧值
+                    const statusSelect = document.getElementById('status');
+                    if (statusSelect && data.new_status) {
+                        statusSelect.value = data.new_status;
+                    }
+
                     // 使用 Promise 和 setTimeout 确保 DOM 更新后再显示提示
                     return new Promise(resolve => {
                         setTimeout(() => {
-                            alert('AI评审完成！');
+                            const suffix = data.status_changed
+                                ? '\n用例状态已同步更新，首页通过率会随之变化。'
+                                : '';
+                            alert('AI评审完成！' + suffix);
                             resolve();
                         }, 0);
                     });

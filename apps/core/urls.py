@@ -13,6 +13,8 @@ urlpatterns = [
 
     path('api/add-knowledge/', views.add_knowledge, name='add_knowledge'),
     path('api/knowledge-list/', views.knowledge_list, name='knowledge_list'),
+    path('api/knowledge-documents/', views.knowledge_documents, name='knowledge_documents'),
+    path('api/knowledge-documents/delete/', views.delete_knowledge_document, name='delete_knowledge_document'),
     path('api/search-knowledge/', views.search_knowledge, name='search_knowledge'),   
     path('api/stream-logs/', stream_logs, name='stream_logs'),
     ] 

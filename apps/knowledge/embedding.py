@@ -192,7 +192,8 @@ def create_embedder():
         return AliyunEmbedder()
     else:
         logger.info("使用本地BGE-M3向量模型")
-        return BGEM3Embedder()
+        model_path = getattr(settings, 'EMBEDDING_MODEL_PATH', None) or "BAAI/bge-m3"
+        return BGEM3Embedder(model_name=model_path)
 
 
 # 测试

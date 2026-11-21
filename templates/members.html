@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}TestBrain - 成员管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <h2 class="page-title">成员管理</h2>
+    <p class="page-desc">
+        账号注册后默认是「测试组员」。组长可在这里调整角色、停用账号、重置密码。
+        为避免把自己锁死，不能改自己的角色、也不能停用自己。
+    </p>
+</div>
+
+<!-- 数据隔离 -->
+<div class="card">
+    <div class="card-body isolation-card">
+        <div class="isolation-text">
+            <h5 class="isolation-title">
+                组员数据隔离
+                <span id="isolation-state" class="isolation-state {% if isolation_enabled %}on{% endif %}">
+                    {% if isolation_enabled %}已开启{% else %}已关闭{% endif %}
+                </span>
+            </h5>
+            <p class="isolation-desc">
+                开启后，测试组员只能看到<strong>自己生成的用例</strong>；组长始终能看到全部。
+                创建者为空的<strong>历史数据视为公共资产</strong>，开启隔离后组员仍可见，避免老数据突然消失。
+                当前共 {{ total_cases }} 条用例。
+            </p>
+        </div>
+        <label class="switch" for="isolation-toggle">
+            <input type="checkbox" id="isolation-toggle" {% if isolation_enabled %}checked{% endif %}>
+            <span class="slider"></span>
+        </label>
+    </div>
+</div>
+
+<!-- 成员表 -->
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>团队成员（{{ members|length }} 人）</span>
+        <small class="text-muted">
+            组长 {{ lead_count }} 人 ｜ 组员 {{ member_count }} 人
+        </small>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="thead-light">
+                    <tr>
+                        <th style="width: 26%">成员</th>
+                        <th style="width: 132px;">角色</th>
+                        <th style="width: 92px;">生成用例</th>
+                        <th style="width: 150px;">最后登录</th>
+                        <th style="width: 86px;">状态</th>
+                        <th style="width: 190px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in members %}
+                    <tr data-user-id="{{ m.id }}" data-username="{{ m.username }}">
+                        <td>
+                            <div class="member-name">
+                                {{ m.display_name }}
+                                {% if m.is_self %}<span class="self-tag">我</span>{% endif %}
+                            </div>
+                            <div class="member-username">@{{ m.username }}</div>
+                        </td>
+                        <td>
+                            <select class="form-control form-control-sm role-select"
+                                    data-id="{{ m.id }}"
+                                    {% if m.is_self %}disabled title="不能修改自己的角色"{% endif %}>
+                                <option value="lead" {% if m.role == 'lead' %}selected{% endif %}>{{ role_labels.lead }}</option>
+                                <option value="member" {% if m.role == 'member' %}selected{% endif %}>{{ role_labels.member }}</option>
+                            </select>
+                        </td>
+                        <td class="member-cases">{{ m.case_count }}</td>
+                        <td class="member-login">
+                            {% if m.last_login %}{{ m.last_login|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">从未登录</span>{% endif %}
+                        </td>
+                        <td>
+                            <span class="status-badge {% if m.is_active %}status-active{% else %}status-inactive{% endif %}">
+                                {% if m.is_active %}在职{% else %}已停用{% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            <button type="button" class="btn btn-sm btn-outline-secondary reset-pwd"
+                                    data-id="{{ m.id }}" data-name="{{ m.username }}">重置密码</button>
+                            <button type="button" class="btn btn-sm {% if m.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %} toggle-active"
+                                    data-id="{{ m.id }}" data-name="{{ m.username }}"
+                                    data-active="{{ m.is_active|yesno:'1,0' }}"
+                                    {% if m.is_self %}disabled title="不能停用自己"{% endif %}>
+                                {% if m.is_active %}停用{% else %}启用{% endif %}
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    function csrfToken() {
+        const el = document.querySelector('[name=csrfmiddlewaretoken]');
+        if (el && el.value) return el.value;
+        const m = document.cookie.match(/csrftoken=([^;]+)/);
+        return m ? m[1] : '';
+    }
+
+    function notify(msg, type) {
+        if (typeof showNotification === 'function') {
+            showNotification(msg, type || 'info');
+        } else {
+            alert(msg);
+        }
+    }
+
+    async function postJSON(url, payload) {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+            body: JSON.stringify(payload || {})
+        });
+        return resp.json();
+    }
+
+    // ---- 数据隔离开关 ----
+    const isolationToggle = document.getElementById('isolation-toggle');
+    const isolationState = document.getElementById('isolation-state');
+    isolationToggle.addEventListener('change', async function () {
+        const target = this.checked;
+        this.disabled = true;
+        try {
+            const data = await postJSON('/accounts/members/toggle-isolation/');
+            if (!data.success) throw new Error(data.message);
+            isolationToggle.checked = data.enabled;
+            isolationState.textContent = data.enabled ? '已开启' : '已关闭';
+            isolationState.classList.toggle('on', data.enabled);
+            notify(data.message, 'success');
+        } catch (err) {
+            isolationToggle.checked = !target;   // 回滚
+            notify('切换失败：' + err.message, 'error');
+        } finally {
+            isolationToggle.disabled = false;
+        }
+    });
+
+    // ---- 改角色 ----
+    document.querySelectorAll('.role-select').forEach(select => {
+        const original = select.value;
+        select.addEventListener('change', async function () {
+            const userId = this.dataset.id;
+            const role = this.value;
+            this.disabled = true;
+            try {
+                const data = await postJSON('/accounts/members/update/', {
+                    user_id: userId, action: 'role', role: role
+                });
+                if (!data.success) throw new Error(data.message);
+                notify(data.message, 'success');
+            } catch (err) {
+                this.value = original;           // 回滚到改之前
+                notify('修改角色失败：' + err.message, 'error');
+            } finally {
+                this.disabled = false;
+            }
+        });
+    });
+
+    // ---- 启停账号 ----
+    document.querySelectorAll('.toggle-active').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            const userId = this.dataset.id;
+            const name = this.dataset.name;
+            const isActive = this.dataset.active === '1';
+            if (isActive && !confirm(`确认停用「${name}」？停用后该账号将无法登录。`)) return;
+
+            this.disabled = true;
+            try {
+                const data = await postJSON('/accounts/members/update/', {
+                    user_id: userId, action: 'toggle_active'
+                });
+                if (!data.success) throw new Error(data.message);
+                notify(data.message, 'success');
+                window.location.reload();
+            } catch (err) {
+                notify('操作失败：' + err.message, 'error');
+                this.disabled = false;
+            }
+        });
+    });
+
+    // ---- 重置密码 ----
+    document.querySelectorAll('.reset-pwd').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            const userId = this.dataset.id;
+            const name = this.dataset.name;
+            const pwd = prompt(`为「${name}」设置新密码（至少 8 位，不能是纯数字）：`);
+            if (pwd === null) return;            // 取消
+            if (!pwd.trim()) {
+                notify('密码不能为空', 'error');
+                return;
+            }
+
+            this.disabled = true;
+            try {
+                const data = await postJSON('/accounts/members/update/', {
+                    user_id: userId, action: 'reset_password', password: pwd.trim()
+                });
+                if (!data.success) throw new Error(data.message);
+                notify(data.message, 'success');
+            } catch (err) {
+                notify('重置失败：' + err.message, 'error');
+            } finally {
+                this.disabled = false;
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

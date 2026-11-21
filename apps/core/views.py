@@ -1,9 +1,10 @@
+from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 import json
 
-from .models import TestCase, KnowledgeBase
+from .models import TestCase, KnowledgeBase, TestCaseReview
 from ..knowledge.service import get_knowledgeService_instance
 
 # 初始化服务
@@ -17,8 +18,11 @@ from django.views.decorators.csrf import csrf_exempt
 import os
 from datetime import datetime
 from apps.knowledge.milvus_helper import process_singel_file
+from apps.utils.review_parse import parse_review_json, extract_score
+from apps.core.permissions import visible_test_cases
 
 import hashlib
+import math
 
 
 
@@ -47,26 +51,103 @@ knowledge_service = get_knowledgeService_instance()
 # test_case_generator = TestCaseGeneratorAgent(llm_service, knowledge_service)
 #test_case_reviewer = TestCaseReviewerAgent(llm_service, knowledge_service)
 
-# @login_required 先屏蔽登录
+@login_required
 def index(request):
     """页面-首页视图"""
-    # 获取测试用例统计数据
-    total_test_cases = TestCase.objects.count()
-    pending_count = TestCase.objects.filter(status='pending').count()
-    approved_count = TestCase.objects.filter(status='approved').count()
-    rejected_count = TestCase.objects.filter(status='rejected').count()
-    
+    # 统计口径必须和列表页一致：组员开启数据隔离后，这里也只能算自己看得到的用例，
+    # 否则「总数 39」但列表只有 5 条，用户会以为数据丢了
+    visible = visible_test_cases(request.user)
+    total_test_cases = visible.count()
+    pending_count = visible.filter(status='pending').count()
+    approved_count = visible.filter(status='approved').count()
+    rejected_count = visible.filter(status='rejected').count()
+
+    # ---- 测试报告数据 ----
+    # 通过率口径：只算「已评审」的用例，未评审的不进分母。
+    # 用全部做分母（4/39 = 10%）会让人误以为质量差，实际是还没评。
+    reviewed_count = approved_count + rejected_count
+    pass_rate = round(approved_count / reviewed_count * 100, 1) if reviewed_count else 0.0
+
+    # AI 评审覆盖情况：多少条用例被 AI 评过、平均分、低分多少
+    # 同样只统计当前用户可见的用例
+    visible_ids = visible.values('id')
+    review_rows = list(
+        TestCaseReview.objects.filter(test_case_id__in=visible_ids)
+        .values_list('review_comments', flat=True)
+    )
+    scores = [s for s in (extract_score(parse_review_json(c)) for c in review_rows) if s is not None]
+    ai_reviewed_cases = (
+        TestCaseReview.objects.filter(test_case_id__in=visible_ids)
+        .values('test_case').distinct().count()
+    )
+    avg_score = round(sum(scores) / len(scores), 2) if scores else None
+    low_score_count = sum(1 for s in scores if s < 6)
+    last_review_at = (
+        TestCaseReview.objects.filter(test_case_id__in=visible_ids)
+        .order_by('-review_date').values_list('review_date', flat=True).first()
+    )
+
+    # ---- 人工评审 ----
+    # 人工分与 AI 分的差值：差得越大说明 AI 评审越不可信。
+    # prefetch reviews 是因为 score_gap 要读最近一条评审的分数，不预取就是 N+1。
+    manual_cases = list(
+        visible.exclude(manual_score__isnull=True).prefetch_related('reviews')
+    )
+    manual_reviewed_count = len(manual_cases)
+    gap_values = [tc.score_gap for tc in manual_cases if tc.score_gap is not None]
+    invalid_count = sum(1 for tc in manual_cases if tc.is_invalid)
+    avg_gap = round(sum(gap_values) / len(gap_values), 2) if gap_values else None
+
+    # 环形图分段：SVG 用 stroke-dasharray 画，半径固定 70，周长预计算
+    circumference = 2 * math.pi * 70
+    donut_total = total_test_cases or 1
+    segments, acc = [], 0.0
+    for label, value, color in [
+        ('评审通过', approved_count, '#10b981'),
+        ('评审未通过', rejected_count, '#ef4444'),
+        ('待评审', pending_count, '#cbd5e1'),
+    ]:
+        if value <= 0:
+            continue
+        length = circumference * value / donut_total
+        segments.append({
+            'label': label,
+            'value': value,
+            'color': color,
+            'percent': round(value / donut_total * 100, 1),
+            'dash': round(length, 2),
+            'gap': round(circumference - length, 2),
+            'offset': round(-acc, 2),
+        })
+        acc += length
+
     # 获取最近的测试用例
     recent_test_cases = TestCase.objects.order_by('-created_at')[:10]
-    
+
     context = {
         'total_test_cases': total_test_cases,
         'pending_count': pending_count,
         'approved_count': approved_count,
         'rejected_count': rejected_count,
         'recent_test_cases': recent_test_cases,
+        # 测试报告
+        'reviewed_count': reviewed_count,
+        'pass_rate': pass_rate,
+        'ai_reviewed_cases': ai_reviewed_cases,
+        'ai_review_coverage': round(ai_reviewed_cases / total_test_cases * 100, 1) if total_test_cases else 0.0,
+        'avg_score': avg_score,
+        'low_score_count': low_score_count,
+        'review_rounds': len(review_rows),
+        'last_review_at': last_review_at,
+        # 人工评审
+        'manual_reviewed_count': manual_reviewed_count,
+        'invalid_count': invalid_count,
+        'avg_gap': avg_gap,
+        'score_gap_threshold': getattr(settings, 'SCORE_GAP_THRESHOLD', 3.0),
+        'report_segments': segments,
+        'report_empty': total_test_cases == 0,
     }
-    
+
     return render(request, 'index.html', context)
 
 
@@ -100,12 +181,49 @@ def format_test_cases_to_html(test_cases):
     return html
 
 
-# @login_required 先屏蔽登录
+@login_required
 def knowledge_view(request):
     """知识库管理页面"""
     return render(request, 'knowledge.html')
 
-# @login_required 先屏蔽登录
+
+@login_required
+@require_http_methods(["GET"])
+def knowledge_documents(request):
+    """列出知识库中的所有文档"""
+    try:
+        data = knowledge_service.list_documents()
+        return JsonResponse({'success': True, **data})
+    except Exception as e:
+        logger.error(f"获取知识库文档列表失败: {e}", exc_info=True)
+        return JsonResponse({'success': False, 'message': str(e)}, status=500)
+
+
+@login_required
+@require_http_methods(["POST"])
+def delete_knowledge_document(request):
+    """删除某个来源文档的全部向量片段"""
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'message': '无效的JSON数据'}, status=400)
+
+    source = data.get('source')
+    if not source:
+        return JsonResponse({'success': False, 'message': '来源标识不能为空'}, status=400)
+
+    try:
+        removed = knowledge_service.delete_document(source)
+        return JsonResponse({
+            'success': True,
+            'message': f'已删除，清理 {removed} 个片段',
+            'removed': removed,
+        })
+    except Exception as e:
+        logger.error(f"删除知识文档失败: {e}", exc_info=True)
+        return JsonResponse({'success': False, 'message': str(e)}, status=500)
+
+@login_required
 @require_http_methods(["POST"])
 def add_knowledge(request):
     """添加知识条目"""
@@ -134,7 +252,7 @@ def add_knowledge(request):
             'message': str(e)
         })
 
-# @login_required 先屏蔽登录
+@login_required
 def knowledge_list(request):
     """获取知识库列表"""
     try:
@@ -159,7 +277,7 @@ def knowledge_list(request):
             'message': str(e)
         })
 
-# @login_required 先屏蔽登录
+@login_required
 @require_http_methods(["POST"])
 def search_knowledge(request):
     """搜索知识库"""
@@ -188,187 +306,146 @@ def search_knowledge(request):
             'message': str(e)
         })
 
-@csrf_exempt
+# ---- 知识库上传限制 ----
+# 只放这三种：docx 走 python-docx 结构化解析、pdf 走 unstructured、md 直接读文本。
+# 其他格式（xls/ppt/图片）unstructured 也能解析，但碎片质量差，
+# 进知识库反而污染检索结果。
+KB_ALLOWED_EXTENSIONS = {'.docx', '.pdf', '.md'}
+KB_MAX_FILES = 5
+# 20MB：上传后要解析 + 切块 + 向量化，都是同步阻塞的。
+# 不设限的话，一个 200MB 的 PDF 能让请求挂十几分钟，浏览器和网关都会先超时。
+KB_MAX_FILE_SIZE = 20 * 1024 * 1024
+
+
+def _ingest_knowledge_file(uploaded_file, upload_dir):
+    """单个文件：校验 → 存盘（同名覆盖，先清旧向量）→ 解析 → 向量化 → 入库。
+
+    返回 (片段数, 错误信息, 是否覆盖)
+    """
+    name = os.path.basename(uploaded_file.name)
+    ext = os.path.splitext(name)[1].lower()
+
+    if ext not in KB_ALLOWED_EXTENSIONS:
+        return 0, f'不支持 {ext or "无扩展名"} 格式，仅支持 docx / pdf / md', False
+
+    if uploaded_file.size > KB_MAX_FILE_SIZE:
+        limit_mb = KB_MAX_FILE_SIZE // (1024 * 1024)
+        size_mb = uploaded_file.size / 1024 / 1024
+        return 0, f'文件 {size_mb:.1f}MB 超过 {limit_mb}MB 限制', False
+
+    file_path = os.path.join(upload_dir, name)
+    overwritten = os.path.exists(file_path)
+
+    if overwritten:
+        logger.info(f"同名文件已存在，覆盖并清理旧向量: {file_path}")
+        try:
+            knowledge_service.vector_store.delete_by_source(file_path)
+        except Exception as e:
+            logger.error(f"删除旧向量失败: {e}", exc_info=True)
+            return 0, f'覆盖文件时清理旧数据失败：{e}', True
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            logger.error(f"删除旧文件失败: {e}", exc_info=True)
+            return 0, f'删除旧文件失败：{e}', True
+
+    os.makedirs(upload_dir, exist_ok=True)
+    with open(file_path, 'wb+') as f:
+        for chunk in uploaded_file.chunks():
+            f.write(chunk)
+    logger.info(f"文件已保存: {file_path}")
+
+    chunks = process_singel_file(file_path)
+    if not chunks:
+        return 0, '文件中没有解析到有效内容', overwritten
+
+    text_contents = [
+        str(chunk.text) if hasattr(chunk, 'text') else str(chunk)
+        for chunk in chunks
+    ]
+    text_contents = [t for t in text_contents if t.strip()]
+    if not text_contents:
+        return 0, '文件中没有解析到有效内容', overwritten
+
+    embeddings = knowledge_service.embedder.get_embeddings(
+        texts=text_contents, show_progress_bar=False
+    )
+    embeddings_list = [emb.tolist() if hasattr(emb, 'tolist') else emb for emb in embeddings]
+
+    stem_hash = hashlib.md5(name.encode()).hexdigest()[:10]
+    now = datetime.now().isoformat()
+    data_to_insert = [
+        {
+            'embedding': embeddings_list[i],
+            'content': text_contents[i],
+            'metadata': '{}',
+            'source': file_path,
+            'doc_type': ext,
+            'chunk_id': f"{stem_hash}_{i:04d}",
+            'upload_time': now,
+        }
+        for i in range(len(text_contents))
+    ]
+
+    knowledge_service.vector_store.add_data(data_to_insert)
+    logger.info(f"{name} 入库完成：{len(data_to_insert)} 个片段")
+    return len(data_to_insert), None, overwritten
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
 def upload_single_file(request):
-    """处理文件上传的视图函数"""
+    """知识库文件上传：一次最多 5 个 docx / pdf / md。"""
     if request.method == 'GET':
-        return render(request, 'upload.html')
-    elif request.method == 'POST':
-        if 'single_file' in request.FILES:  # 修改这里匹配前端的 name 属性
-            uploaded_file = request.FILES['single_file']  # 修改这里匹配前端的 name 属性
-            
-            # 统一使用 MEDIA_ROOT 配置
-            upload_dir = settings.MEDIA_ROOT
-            file_path = os.path.join(upload_dir, uploaded_file.name)
-            
-            # 检查文件是否存在，如果存在则覆盖
-            is_overwrite = False
-            if os.path.exists(file_path):
-                logger.info(f"检测到同名文件存在，将进行覆盖: {file_path}")
-                is_overwrite = True
-                
-                # 1. 删除向量数据库中的旧记录
-                try:
-                    knowledge_service.vector_store.delete_by_source(file_path)
-                    logger.info("成功删除旧的向量记录")
-                except Exception as e:
-                    logger.error(f"删除旧向量记录失败: {str(e)}")
-                    return JsonResponse({
-                        'success': False,
-                        'error': f'覆盖文件时删除旧数据失败: {str(e)}'
-                    })
-                
-                # 2. 删除旧文件
-                try:
-                    os.remove(file_path)
-                    logger.info("成功删除旧文件")
-                except Exception as e:
-                    logger.error(f"删除旧文件失败: {str(e)}")
-                    return JsonResponse({
-                        'success': False,
-                        'error': f'删除旧文件失败: {str(e)}'
-                    })
-                
-            try:
-                # 1. 接收文件
-                logger.info(f"Uploaded file: {uploaded_file}")
-                if not uploaded_file:
-                    return JsonResponse({'success': False, 'error': '未接收到文件'})
-                
-                file_categories = {
-                    "CSV": [".csv"],
-                    "E-mail": [".eml", ".msg", ".p7s"],
-                    "EPUB": [".epub"],
-                    "Excel": [".xls", ".xlsx"],
-                    "HTML": [".html"],
-                    "Image": [".bmp", ".heic", ".jpeg", ".png", ".tiff"],
-                    "Markdown": [".md"],
-                    "Org Mode": [".org"],
-                    "Open Office": [".odt"],
-                    "PDF": [".pdf"],
-                    "Plain text": [".txt"],
-                    "PowerPoint": [".ppt", ".pptx"],
-                    "reStructured Text": [".rst"],
-                    "Rich Text": [".rtf"],
-                    "TSV": [".tsv"],
-                    "Word": [".doc", ".docx"],
-                    "XML": [".xml"]
-                }
-                file_type = os.path.splitext(uploaded_file.name)[1]
-                logger.info(f"上传文件类型: {file_type}")
-                logger.info(f"上传文件名: {uploaded_file.name}")
-                
-                if not file_type:
-                    logger.error("文件没有扩展名")
-                    return JsonResponse({'success': False, 'error': '文件必须包含扩展名'})
-                
-                # 获取所有支持的文件扩展名
-                supported_extensions = [ext.lower() for exts in file_categories.values() for ext in exts]
+        return render(request, 'upload.html', {
+            'max_files': KB_MAX_FILES,
+            'max_size_mb': KB_MAX_FILE_SIZE // (1024 * 1024),
+            'allowed_exts': ['docx', 'pdf', 'md'],
+        })
 
-                if file_type not in supported_extensions:
-                    return JsonResponse({'success': False, 'error': '不支持的文件类型'})
-                
-                # 2. 保存文件到统一目录
-                os.makedirs(upload_dir, exist_ok=True)
-                with open(file_path, 'wb+') as f:
-                    for chunk in uploaded_file.chunks():
-                        f.write(chunk)
-                logger.info(f"文件保存成功, 文件保存路径: {file_path}")
+    # 兼容旧的单文件字段名 single_file
+    files = request.FILES.getlist('files') or request.FILES.getlist('single_file')
+    if not files:
+        return JsonResponse({'success': False, 'error': '未接收到文件'}, status=400)
 
-                # 3. 处理文件
-                chunks = process_singel_file(file_path)  # 获取原始数据和文本
-                if not chunks:
-                    return JsonResponse({'success': False, 'error': '文件中无有效内容'})
+    if len(files) > KB_MAX_FILES:
+        return JsonResponse({
+            'success': False,
+            'error': f'一次最多上传 {KB_MAX_FILES} 个文件，当前选择了 {len(files)} 个'
+        }, status=400)
 
-                # 提取所有chunk.text并记录日志
-                if isinstance(chunks, list):
-                    # 直接从chunks中提取text属性
-                    text_contents = []
-                    for i, chunk in enumerate(chunks):
-                        if hasattr(chunk, 'text'):
-                            text_contents.append(str(chunk.text))
-                        else:
-                            text_contents.append(str(chunk))
-                
-                    logger.info(f"共提取了 {len(text_contents)} 个文本内容")
-                else:
-                    # 单一文本块的情况
-                    if hasattr(chunks, 'text'):
-                        text_contents = [str(chunks.text)]
-                    else:
-                        text_contents = [str(chunks)]
-                    logger.info(f"提取了单个文本内容: {text_contents[0][:100]}...")
+    upload_dir = settings.MEDIA_ROOT
+    results, total_chunks, failed = [], 0, 0
 
-                # 直接生成所有文本内容的向量
-                logger.info("开始生成向量")
-                start_time = datetime.now()
+    for uploaded_file in files:
+        try:
+            count, error, overwritten = _ingest_knowledge_file(uploaded_file, upload_dir)
+        except Exception as e:
+            logger.error(f"处理文件 {uploaded_file.name} 失败: {e}", exc_info=True)
+            count, error, overwritten = 0, str(e), False
 
-                try:
-                    # 直接为所有文本内容生成向量
-                    all_embeddings = knowledge_service.embedder.get_embeddings(texts=text_contents, show_progress_bar=False)
-                    logger.info(f"成功生成 {len(all_embeddings)} 个向量")
-                    
-                    # 确保embeddings是列表格式
-                    embeddings_list = []
-                    for emb in all_embeddings:
-                        if hasattr(emb, 'tolist'):
-                            emb = emb.tolist()
-                        embeddings_list.append(emb)
-                    
-                    # 准备插入数据
-                    data_to_insert = []
-                    for i in range(len(text_contents)):
-                        item = {
-                            "embedding": embeddings_list[i],  # 单个embedding向量
-                            "content": text_contents[i],      # 文本内容
-                            "metadata": '{}',                 # 元数据
-                            "source": file_path,              # 来源
-                            "doc_type": file_type,            # 文档类型
-                            "chunk_id": f"{hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]}_{i:04d}",  # 块ID
-                            "upload_time": datetime.now().isoformat()  # 上传时间
-                        }
-                        data_to_insert.append(item)
-                    
-                    # 插入数据到Milvus
-                    logger.info(f"开始往milvus中插入 {len(data_to_insert)} 条数据")
-                    knowledge_service.vector_store.add_data(data_to_insert)
-                    logger.info("数据插入完成")
-                    
-                    total_time = (datetime.now() - start_time).total_seconds()
-                    logger.info(f"向量生成和插入完成，总耗时: {total_time:.2f} 秒")
-                    
-                    return JsonResponse({
-                        'success': True, 
-                        'count': len(text_contents),
-                        'message': f'成功{"覆盖" if is_overwrite else "导入"}文件到知识库'
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"生成或插入向量时出错: {str(e)}", exc_info=True)
-                    return JsonResponse({
-                        'success': False, 
-                        'error': str(e)
-                    })
-                
-            except Exception as e:
-                logger.error(f"处理上传文件时出错: {str(e)}", exc_info=True)
-                return JsonResponse({
-                    'success': False, 
-                    'error': str(e)
-                })
-            finally:
-                # 清理临时文件（注释掉，因为现在保存的是正式文件）
-                # if os.path.exists(file_path):
-                #     os.remove(file_path)
-                pass
+        if error:
+            failed += 1
         else:
-            return JsonResponse({
-                'success': False,
-                'error': '未接收到文件'
-            })
-    
-    return JsonResponse({
-        'success': False,
-        'error': '不支持的请求方法'
-    })
+            total_chunks += count
+        results.append({
+            'name': uploaded_file.name,
+            'count': count,
+            'error': error,
+            'overwritten': overwritten,
+        })
 
+    ok = len(files) - failed
+    return JsonResponse({
+        'success': True,          # 请求本身处理完成；业务结果看 results / failed
+        'total': len(files),
+        'ok': ok,
+        'failed': failed,
+        'count': total_chunks,
+        'results': results,
+        'message': (
+            f'成功导入 {ok} 个文件，共 {total_chunks} 条向量数据'
+            if failed == 0 else
+            f'{ok} 个成功、{failed} 个失败，共 {total_chunks} 条向量数据'
+        ),
+    })
